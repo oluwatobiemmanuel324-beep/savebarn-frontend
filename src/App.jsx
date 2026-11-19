@@ -18,6 +18,8 @@ import {
   CloudRain,
   Columns,
   Sparkles,
+  Minus,
+  Plus,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -201,7 +203,7 @@ const INITIAL_CONTROLS = [
     nameEn: "Exhaust & Cooling Fan",
     nameHa: "Fankar Cire Zafi & Iska",
     type: "COOLING",
-    mode: "IN_FAVOR", // "IN_FAVOR" | "AGAINST"
+    mode: "IN_FAVOR",
     active: true,
   },
   {
@@ -241,7 +243,7 @@ function computeTHI(tempC, rh) {
 function evaluateAnimalHealth(profile, tempC, rh, ammoniaPpm, thi) {
   const reasonsEn = [];
   const reasonsHa = [];
-  let level = "NORMAL"; // NORMAL | ALERT | DANGER | EMERGENCY
+  let level = "NORMAL";
 
   if (tempC > profile.dangerTemp || thi >= profile.maxThi + 5 || ammoniaPpm >= profile.dangerAmmonia) {
     level = "EMERGENCY";
@@ -363,10 +365,10 @@ export default function App() {
   });
 
   const [showOnboardingModal, setShowOnboardingModal] = useState(!workspace.onboarded);
-  const [liveSyncStatus, setLiveSyncStatus] = useState("Standby");
+  const [liveSyncStatus, setLiveSyncStatus] = useState("Interactive Demo");
   const [lastUpdated, setLastUpdated] = useState(new Date().toLocaleTimeString());
+  const [manualOverrideLock, setManualOverrideLock] = useState(false);
 
-  // Onboarding form state
   const [formFarmName, setFormFarmName] = useState(workspace.farmName);
   const [formOwnerName, setFormOwnerName] = useState(workspace.ownerName);
   const [formLocation, setFormLocation] = useState(workspace.location);
@@ -383,8 +385,8 @@ export default function App() {
     } catch (_) {}
   }, [workspace]);
 
-  // Sync live backend telemetry into active zone when available
   useEffect(() => {
+    if (manualOverrideLock) return;
     let mounted = true;
     const syncBackend = async () => {
       try {
@@ -430,12 +432,12 @@ export default function App() {
     };
 
     syncBackend();
-    const timer = setInterval(syncBackend, 5000);
+    const timer = setInterval(syncBackend, 8000);
     return () => {
       mounted = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [manualOverrideLock]);
 
   const lang = workspace.lang;
   const activeZone =
@@ -483,6 +485,8 @@ export default function App() {
       ],
     };
 
+    setManualOverrideLock(true);
+    setLiveSyncStatus("Manual / Demo Active");
     setWorkspace((prev) => ({
       ...prev,
       onboarded: true,
@@ -497,6 +501,8 @@ export default function App() {
   };
 
   const updateActiveZoneTelemetry = (patch) => {
+    setManualOverrideLock(true);
+    setLiveSyncStatus("Manual / Demo Active");
     setWorkspace((prev) => {
       const updatedZones = prev.zones.map((z) => {
         if (z.id !== activeZone.id) return z;
@@ -525,6 +531,13 @@ export default function App() {
       return { ...prev, zones: updatedZones };
     });
     setLastUpdated(new Date().toLocaleTimeString());
+  };
+
+  const stepTemperature = (delta) => {
+    const nextTemp = Number(
+      Math.max(5, Math.min(45, Number(activeZone.temperatureC) + delta)).toFixed(1)
+    );
+    updateActiveZoneTelemetry({ temperatureC: nextTemp });
   };
 
   const toggleControlMode = (controlId) => {
@@ -556,19 +569,17 @@ export default function App() {
       const sign = ctrl.mode === "IN_FAVOR" ? 1 : -1;
 
       if (ctrl.type === "COOLING") {
-        // In favor of hot asset -> lowers temp; against asset -> raises temp
-        deltaTemp += assessment.isTooHot ? -1.4 * sign : -0.5 * sign;
+        deltaTemp += assessment.isTooHot ? -1.4 * sign : -0.8 * sign;
       } else if (ctrl.type === "HEATING") {
-        // In favor of cold asset -> raises temp; against asset -> lowers temp
-        deltaTemp += assessment.isTooCold ? 1.5 * sign : 0.8 * sign;
+        deltaTemp += assessment.isTooCold ? 1.5 * sign : 1.0 * sign;
       } else if (ctrl.type === "AIRFLOW") {
         deltaNh3 += -1.6 * sign;
-        deltaTemp += assessment.isTooHot ? -0.6 * sign : 0;
+        deltaTemp += assessment.isTooHot ? -0.6 * sign : -0.3 * sign;
       }
     });
 
-    const nextTemp = Number(Math.max(10, Math.min(42, activeZone.temperatureC + deltaTemp)).toFixed(1));
-    const nextNh3 = Number(Math.max(2, Math.min(45, activeZone.ammoniaPpm + deltaNh3)).toFixed(1));
+    const nextTemp = Number(Math.max(5, Math.min(45, activeZone.temperatureC + deltaTemp)).toFixed(1));
+    const nextNh3 = Number(Math.max(1, Math.min(45, activeZone.ammoniaPpm + deltaNh3)).toFixed(1));
     updateActiveZoneTelemetry({ temperatureC: nextTemp, ammoniaPpm: nextNh3 });
   };
 
@@ -588,7 +599,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      {/* Top Header */}
       <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -633,7 +643,6 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        {/* Welcome & Zone Switcher Bar */}
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -664,7 +673,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Zone Tabs + Species Selector */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
             <div className="flex flex-wrap gap-2">
               {workspace.zones.map((z) => {
@@ -705,7 +713,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Species Rule Explanation Banner */}
           <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 text-xs sm:text-sm text-slate-300">
             <span className="font-semibold text-emerald-400">
               {lang === "en" ? "Species Comfort Rule: " : "Ka'idar Lafiyar Wannan Dabba: "}
@@ -714,7 +721,6 @@ export default function App() {
           </div>
         </section>
 
-        {/* Telemetry Metric Cards */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <MetricCard
             icon={<Thermometer className="w-5 h-5 text-orange-400" />}
@@ -760,7 +766,6 @@ export default function App() {
           />
         </section>
 
-        {/* Climate Regulator Control Panel ("In Favor" vs. "Against" Asset) */}
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -772,20 +777,43 @@ export default function App() {
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
                 {lang === "en"
-                  ? "Set each surrounding climate device to work In Favor of protecting your livestock or Against the asset to test stress/override effects."
-                  : "Saita kowace na'ura ta yi aiki don kare dabbobi (In Favor) ko kuma akasin haka (Against) domin gwaji."}
+                  ? "Use - / + to step temperature up or down directly, or click Simulate Regulator Effect Now."
+                  : "Yi amfani da - / + don rage ko kara zafi kai tsaye, ko danna Simulate Regulator Effect Now."}
               </p>
             </div>
 
-            <button
-              onClick={applyRegulatorsToEnvironment}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-semibold transition cursor-pointer"
-            >
-              <RefreshCw className="w-4 h-4" />
-              {lang === "en"
-                ? "Simulate Regulator Effect Now"
-                : "Gwada Tasirin Na'urorin Yanzu"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => stepTemperature(-1)}
+                aria-label="Decrease temperature by 1 degree Celsius"
+                className="flex items-center gap-1 px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs sm:text-sm font-semibold transition cursor-pointer"
+              >
+                <Minus className="w-4 h-4" />
+                <span>1°C</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => stepTemperature(1)}
+                aria-label="Increase temperature by 1 degree Celsius"
+                className="flex items-center gap-1 px-3.5 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs sm:text-sm font-semibold transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>1°C</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={applyRegulatorsToEnvironment}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-semibold transition cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+                {lang === "en"
+                  ? "Simulate Regulator Effect Now"
+                  : "Gwada Tasirin Na'urorin Yanzu"}
+              </button>
+            </div>
           </div>
 
           {againstAssetControls.length > 0 && (
@@ -883,7 +911,6 @@ export default function App() {
           </div>
         </section>
 
-        {/* Interpretation & Chart Grid */}
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -918,7 +945,6 @@ export default function App() {
               </ol>
             </div>
 
-            {/* Pitch Test Sliders */}
             <div className="pt-3 border-t border-slate-800 space-y-2.5">
               <div className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
                 {lang === "en"
@@ -932,8 +958,8 @@ export default function App() {
                 </div>
                 <input
                   type="range"
-                  min="12"
-                  max="40"
+                  min="5"
+                  max="45"
                   step="0.5"
                   value={activeZone.temperatureC}
                   onChange={(e) =>
@@ -949,7 +975,7 @@ export default function App() {
                 </div>
                 <input
                   type="range"
-                  min="2"
+                  min="1"
                   max="35"
                   step="0.5"
                   value={activeZone.ammoniaPpm}
@@ -1027,7 +1053,6 @@ export default function App() {
         </section>
       </main>
 
-      {/* Onboarding & Hardware Activation Modal */}
       {showOnboardingModal && (
         <div className="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
           <form
