@@ -23,6 +23,7 @@ import {
   Database,
   BookmarkCheck,
   XCircle,
+  Sliders,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -37,7 +38,7 @@ import {
 const API_URL =
   import.meta.env.VITE_API_URL || "https://savebarn-backend.onrender.com";
 
-const STORAGE_KEY = "savebarn_humanized_black_v4";
+const STORAGE_KEY = "savebarn_pitch_black_v6";
 
 function generateAutoHardwareId(purpose = "BOTH") {
   const prefix =
@@ -59,19 +60,12 @@ const CATALOG = [
     maxTemp: 28,
     maxThi: 77,
     maxNh3: 15,
+    riskNoteEn:
+      "Heat above 28°C or high THI lowers feed intake, slows growth, and increases heat stress; ammonia above 15 ppm irritates airways.",
+    riskNoteHa:
+      "Zafin da ya wuce 28°C ko THI mai yawa na rage cin abinci da girma; ammonia sama da 15 ppm na cutar da numfashi.",
     sourceEn: "Source: FAO & Poultry Extension Thermoneutral Benchmarks",
     sourceHa: "Tushe: Littattafan FAO & Ka'idojin Kiwon Kaji",
-  },
-  {
-    id: "POULTRY_LAYER",
-    label: "Layer Hens",
-    category: "LIVESTOCK",
-    minTemp: 19,
-    maxTemp: 26,
-    maxThi: 76,
-    maxNh3: 15,
-    sourceEn: "Source: FAO & Veterinary Layer Heat-Stress Guidelines",
-    sourceHa: "Tushe: Littattafan FAO & Kwararrun Kiwon Kaji",
   },
   {
     id: "SWINE_PIG",
@@ -81,6 +75,10 @@ const CATALOG = [
     maxTemp: 24,
     maxThi: 75,
     maxNh3: 12,
+    riskNoteEn:
+      "Pigs feel heat stress early above 24°C; ammonia above 12 ppm harms respiratory health.",
+    riskNoteHa:
+      "Aladu na shiga matsin zafi da wuri sama da 24°C; ammonia sama da 12 ppm na cutar da numfashi.",
     sourceEn: "Source: Swine Production & Veterinary THI Reference Scales",
     sourceHa: "Tushe: Ka'idojin Kiwon Aladu & Ma'aunin THI",
   },
@@ -92,6 +90,10 @@ const CATALOG = [
     maxTemp: 27,
     maxThi: 78,
     maxNh3: 15,
+    riskNoteEn:
+      "High humidity with heat above 27°C raises THI stress; damp floors or cold drafts raise respiratory risk.",
+    riskNoteHa:
+      "Haduwar zafi sama da 27°C da danshi na kara matsin THI; iskar sanyi ko danshi na kawo matsala.",
     sourceEn: "Source: FAO Small Ruminant Housing & Climate Reference",
     sourceHa: "Tushe: Ka'idojin FAO Na Awaki Da Tumaki",
   },
@@ -103,6 +105,10 @@ const CATALOG = [
     maxTemp: 25,
     maxThi: 72,
     maxNh3: 15,
+    riskNoteEn:
+      "THI at or above 72 marks heat-stress onset in cattle, reducing feed efficiency and milk/weight output.",
+    riskNoteHa:
+      "THI daga 72 zuwa sama na nuna farkon matsin zafi a shanu, wanda ke rage amfanin abinci da yawan madara.",
     sourceEn: "Source: Dairy/Beef THI Heat-Load & Veterinary Extension Data",
     sourceHa: "Tushe: Bayanan Ma'aunin Zafi (THI) Na Shanu",
   },
@@ -114,6 +120,10 @@ const CATALOG = [
     maxTemp: 25,
     maxThi: 75,
     maxNh3: 15,
+    riskNoteEn:
+      "Warmth above 25°C plus high humidity speeds mold growth, pest activity, and storage spoilage.",
+    riskNoteHa:
+      "Zafi sama da 25°C tare da danshi na sa kyambo da kwari su yawaita a hatsi da aka ajiye.",
     sourceEn: "Source: FAO Post-Harvest Grain Storage & Moisture Guidelines",
     sourceHa: "Tushe: Ka'idojin FAO Na Ajiyar Hatsi Bayan Girbi",
   },
@@ -125,6 +135,10 @@ const CATALOG = [
     maxTemp: 20,
     maxThi: 70,
     maxNh3: 15,
+    riskNoteEn:
+      "Temperatures above 20°C speed up softening, moisture loss, and post-harvest rot.",
+    riskNoteHa:
+      "Zafi sama da 20°C na hanzarta lalacewa da taushi a kayan lambu bayan girbi.",
     sourceEn: "Source: Post-Harvest Horticultural Cold/Cool Storage Standards",
     sourceHa: "Tushe: Ka'idojin Ajiyar Kayan Lambu Bayan Girbi",
   },
@@ -136,6 +150,10 @@ const CATALOG = [
     maxTemp: 24,
     maxThi: 74,
     maxNh3: 15,
+    riskNoteEn:
+      "High heat or dampness speeds sprouting, rot, and weight loss in stored tubers.",
+    riskNoteHa:
+      "Zafi ko danshi mai yawa na sa doya ko rogo su yi toho ko su ruɓe da wuri.",
     sourceEn: "Source: Root & Tuber Post-Harvest Storage Reference Manuals",
     sourceHa: "Tushe: Littattafan Ajiyar Doya Da Rogo",
   },
@@ -184,7 +202,7 @@ const INITIAL_SPEED_DB = [
     minC: -10,
     maxC: 19.9,
     bestSpeed: "LOW",
-    notes: "Keeps air gentle so stock aren't chilled and stored crops don't sweat.",
+    notes: "Gentle airflow so stock are not chilled and crops do not sweat.",
   },
   {
     id: "db-2",
@@ -192,7 +210,7 @@ const INITIAL_SPEED_DB = [
     minC: 20,
     maxC: 26,
     bestSpeed: "LOW",
-    notes: "Steady light airflow without wasting power.",
+    notes: "Steady light airflow with low power draw.",
   },
   {
     id: "db-3",
@@ -200,7 +218,7 @@ const INITIAL_SPEED_DB = [
     minC: 27,
     maxC: 31,
     bestSpeed: "MEDIUM",
-    notes: "Helps push back afternoon heat in pens and stores.",
+    notes: "Moderate airflow for afternoon heat buildup.",
   },
   {
     id: "db-4",
@@ -208,7 +226,7 @@ const INITIAL_SPEED_DB = [
     minC: 31.1,
     maxC: 60,
     bestSpeed: "TURBO",
-    notes: "Stronger airflow when heat climbs high.",
+    notes: "Stronger airflow during peak heat.",
   },
 ];
 
@@ -223,6 +241,26 @@ function getWeatherBand(tempC) {
   if (tempC <= 26) return "Mild (20°C – 26°C)";
   if (tempC <= 31) return "Warm (27°C – 31°C)";
   return "Hot (> 31°C)";
+}
+
+function evaluateProduct(prod) {
+  const rule = prod.rule || CATALOG[0];
+  const thi = computeTHI(prod.temperatureC, prod.humidityPct);
+  const tempOut =
+    prod.temperatureC > rule.maxTemp || prod.temperatureC < rule.minTemp;
+  const thiHigh = thi >= rule.maxThi;
+  const nh3High = prod.ammoniaPpm >= rule.maxNh3;
+  const isHot = prod.temperatureC > rule.maxTemp;
+  const isCold = prod.temperatureC < rule.minTemp;
+
+  let level = "NORMAL";
+  if (prod.temperatureC > rule.maxTemp + 4 || thi >= rule.maxThi + 5) {
+    level = "EMERGENCY";
+  } else if (tempOut || thiHigh || nh3High) {
+    level = "DANGER";
+  }
+
+  return { thi, level, isHot, isCold, thiHigh, nh3High };
 }
 
 function createHistory(tempC, rh, nh3) {
@@ -254,26 +292,34 @@ function resolveRuleForProduct(label, purpose) {
 
   if (isCrop) {
     return {
-      id: `custom-${lower.replace(/\s+/g, "-")}`,
+      id: `custom-${lower.replace(/[^a-z0-9]+/g, "-")}`,
       label,
       category: "CROPS",
       minTemp: 14,
       maxTemp: 24,
       maxThi: 74,
       maxNh3: 15,
+      riskNoteEn:
+        "Keep storage cool, dry, and ventilated to slow spoilage, mold, and weight loss.",
+      riskNoteHa:
+        "A kiyaye dakin ajiya da sanyi, bushewa, da iska mai kyau don rage lalacewa.",
       sourceEn: "Source: FAO Post-Harvest Storage & Microclimate Guidelines",
       sourceHa: "Tushe: Ka'idojin FAO Na Ajiyar Amfanin Gona",
     };
   }
 
   return {
-    id: `custom-${lower.replace(/\s+/g, "-")}`,
+    id: `custom-${lower.replace(/[^a-z0-9]+/g, "-")}`,
     label,
     category: "LIVESTOCK",
     minTemp: 18,
     maxTemp: 27,
     maxThi: 76,
     maxNh3: 15,
+    riskNoteEn:
+      "Keep pens within safe temperature and low ammonia to protect feed intake and stock health.",
+    riskNoteHa:
+      "A kiyaye zafin gida da ammonia a matakin da ya dace don kare lafiya da cin abinci.",
     sourceEn: "Source: FAO & Veterinary Livestock Thermal Comfort Guidelines",
     sourceHa: "Tushe: Ka'idojin FAO & Kwararrun Lafiyar Dabbobi",
   };
@@ -346,20 +392,20 @@ export default function App() {
       if (saved) return JSON.parse(saved);
     } catch (_) {}
     const initialProducts = buildProductsFromSelection(
-      ["POULTRY_BROILER"],
+      ["POULTRY_BROILER", "TOMATO_PRODUCE"],
       "",
-      "LIVESTOCK",
+      "BOTH",
       "init"
     );
     return {
       stage: "SIGNUP",
       lang: "en",
       user: null,
-      purpose: "LIVESTOCK",
+      purpose: "BOTH",
       farmName: "",
-      selectedProductIds: ["POULTRY_BROILER"],
+      selectedProductIds: ["POULTRY_BROILER", "TOMATO_PRODUCE"],
       customProductsInput: "",
-      hardwareId: generateAutoHardwareId("LIVESTOCK"),
+      hardwareId: generateAutoHardwareId("BOTH"),
       products: initialProducts,
       activeProductUid: initialProducts[0].uid,
       acUnits: INITIAL_AC_UNITS,
@@ -372,7 +418,7 @@ export default function App() {
   });
 
   const [lastUpdated, setLastUpdated] = useState(new Date().toLocaleTimeString());
-  const [syncLabel, setSyncLabel] = useState("Live Sensor Ready");
+  const [syncLabel, setSyncLabel] = useState("Sensor Ready");
 
   useEffect(() => {
     try {
@@ -390,7 +436,7 @@ export default function App() {
         const data = await res.json();
         const r = data?.zones?.[0]?.readings?.[0];
         if (!active || !r) return;
-        setSyncLabel("Cloud Connected");
+        setSyncLabel("Cloud Synced");
         setLastUpdated(new Date().toLocaleTimeString());
         setState((prev) => ({
           ...prev,
@@ -446,8 +492,17 @@ export default function App() {
     state.products[0];
 
   const activeRule = activeProduct?.rule || CATALOG[0];
-  const thi = computeTHI(activeProduct.temperatureC, activeProduct.humidityPct);
+  const statusInfo = useMemo(() => evaluateProduct(activeProduct), [activeProduct]);
   const currentBand = getWeatherBand(activeProduct.temperatureC);
+
+  const farmAlertsCount = useMemo(() => {
+    return state.products.filter((p) => evaluateProduct(p).level !== "NORMAL")
+      .length;
+  }, [state.products]);
+
+  const reachableAcCount = useMemo(() => {
+    return state.acUnits.filter((a) => a.reachable).length;
+  }, [state.acUnits]);
 
   const matchedDbRecord = useMemo(() => {
     return (
@@ -459,27 +514,6 @@ export default function App() {
     );
   }, [state.speedDb, activeProduct.temperatureC]);
 
-  const statusInfo = useMemo(() => {
-    const tempOut =
-      activeProduct.temperatureC > activeRule.maxTemp ||
-      activeProduct.temperatureC < activeRule.minTemp;
-    const thiHigh = thi >= activeRule.maxThi;
-    const nh3High = activeProduct.ammoniaPpm >= activeRule.maxNh3;
-    const isHot = activeProduct.temperatureC > activeRule.maxTemp;
-    const isCold = activeProduct.temperatureC < activeRule.minTemp;
-
-    if (
-      activeProduct.temperatureC > activeRule.maxTemp + 4 ||
-      thi >= activeRule.maxThi + 5
-    ) {
-      return { level: "EMERGENCY", isHot, isCold };
-    }
-    if (tempOut || thiHigh || nh3High) {
-      return { level: "DANGER", isHot, isCold };
-    }
-    return { level: "NORMAL", isHot: false, isCold: false };
-  }, [activeProduct.temperatureC, activeProduct.ammoniaPpm, thi, activeRule]);
-
   const specificFallbackRecommendation = useMemo(() => {
     if (activeRule.category === "CROPS") {
       return statusInfo.isHot
@@ -490,6 +524,37 @@ export default function App() {
       ? `Open side curtains or vents, shade sun-facing roofing above ${activeProduct.name}, make sure cool drinking water is available, and check AC power or signal path.`
       : `Lower draft curtains around ${activeProduct.name}, keep bedding dry, and check for cold air leaks or AC/heater faults.`;
   }, [activeRule.category, activeProduct.name, statusInfo.isHot]);
+
+  const handleApplyTestReading = (deltaTemp, deltaNh3 = 0) => {
+    setState((prev) => ({
+      ...prev,
+      products: prev.products.map((p) => {
+        if (p.uid !== activeProduct.uid) return p;
+        const nextTemp = Number(
+          Math.max(8, Math.min(44, p.temperatureC + deltaTemp)).toFixed(1)
+        );
+        const nextNh3 = Number(
+          Math.max(1, Math.min(35, p.ammoniaPpm + deltaNh3)).toFixed(1)
+        );
+        const point = {
+          time: new Date().toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+          Temp: nextTemp,
+          THI: computeTHI(nextTemp, p.humidityPct),
+          Ammonia: nextNh3,
+        };
+        return {
+          ...p,
+          temperatureC: nextTemp,
+          ammoniaPpm: nextNh3,
+          history: [...p.history.slice(-11), point],
+        };
+      }),
+    }));
+    setLastUpdated(new Date().toLocaleTimeString());
+  };
 
   const handleGoogleSignIn = (account) => {
     setState((prev) => ({
@@ -664,20 +729,20 @@ export default function App() {
   const handleSignOut = () => {
     localStorage.removeItem(STORAGE_KEY);
     const fresh = buildProductsFromSelection(
-      ["POULTRY_BROILER"],
+      ["POULTRY_BROILER", "TOMATO_PRODUCE"],
       "",
-      "LIVESTOCK",
+      "BOTH",
       "reset"
     );
     setState({
       stage: "SIGNUP",
       lang: state.lang,
       user: null,
-      purpose: "LIVESTOCK",
+      purpose: "BOTH",
       farmName: "",
-      selectedProductIds: ["POULTRY_BROILER"],
+      selectedProductIds: ["POULTRY_BROILER", "TOMATO_PRODUCE"],
       customProductsInput: "",
-      hardwareId: generateAutoHardwareId("LIVESTOCK"),
+      hardwareId: generateAutoHardwareId("BOTH"),
       products: fresh,
       activeProductUid: fresh[0].uid,
       acUnits: INITIAL_AC_UNITS,
@@ -698,8 +763,8 @@ export default function App() {
             <span className="text-neutral-600">/</span>
             <span className="text-xs text-neutral-400">
               {lang === "en"
-                ? "Everyday Farm & Storage Climate Log"
-                : "Kula Da Yanayin Gona Da Ajiya"}
+                ? "Livestock & Crop Storage Microclimate Assistant"
+                : "Kula Da Yanayin Gona Da Ajiyar Amfanin Gona"}
             </span>
           </div>
 
@@ -718,20 +783,22 @@ export default function App() {
           </button>
         </div>
 
-        <div className="max-w-lg w-full mx-auto py-12 space-y-6">
-          <div className="space-y-2">
+        <div className="max-w-xl w-full mx-auto py-12 space-y-6">
+          <div className="space-y-3">
             <p className="text-xs uppercase tracking-widest text-emerald-400">
-              {lang === "en" ? "Start With Google" : "Fara Da Google"}
+              {lang === "en"
+                ? "Prevent Heat & Storage Loss"
+                : "Hana Asarar Zafi Da Lalacewa"}
             </p>
             <h1 className="text-3xl sm:text-4xl font-semibold text-white tracking-tight">
               {lang === "en"
-                ? "Keep your pens and stores in a safe zone."
-                : "Kiyaye dabbobinka da amfanin gonarka a yanayi mai kyau."}
+                ? "Catch heat stress and spoilage risk before losses happen."
+                : "Gano matsalar zafi da lalacewa kafin asara ta faru."}
             </h1>
             <p className="text-sm text-neutral-400 leading-relaxed">
               {lang === "en"
-                ? "Sign in with Google to set up your farm, list each animal or crop separately, check nearby ACs, and keep notes on what works best."
-                : "Shiga da Google don saita gonarka, raba kowane dabba ko amfanin gona, duba AC da ke kusa, da rubuta bayanan kula."}
+                ? "Different animals and stored crops spoil at different temperatures and THI levels. SaveBarn checks each item separately, finds nearby ACs in control range, saves proven AC speeds by weather, and gives honest manual fallback steps when control is unverified."
+                : "Kowane dabba ko amfanin gona na da nasa matakin zafi da THI. SaveBarn na duba su daban-daban, yana nemo AC da ke kusa, yana adana gudun AC bisa yanayi, kuma yana ba da mafita idan na'ura ba ta amsa ba."}
             </p>
           </div>
 
@@ -771,7 +838,7 @@ export default function App() {
 
         <div className="max-w-4xl w-full mx-auto border-t border-neutral-900 pt-4 text-xs text-neutral-500 flex justify-between">
           <span>SaveBarn</span>
-          <span>FAO & Veterinary Climate Benchmarks</span>
+          <span>FAO, THI & Post-Harvest Benchmarks</span>
         </div>
       </div>
     );
@@ -1100,6 +1167,40 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 sm:px-8 py-7 space-y-9">
+        <section className="border-b border-neutral-800 pb-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs">
+          <div className="space-y-1">
+            <div className="text-neutral-400">
+              {lang === "en"
+                ? `Tracking ${state.products.length} separate farm item(s) • ${farmAlertsCount} outside safe/comfort limits • ${reachableAcCount}/${state.acUnits.length} ACs in control range`
+                : `Ana kula da kayayyaki ${state.products.length} daban • ${farmAlertsCount} na bukatar kulawa • ${reachableAcCount}/${state.acUnits.length} AC na cikin zango`}
+            </div>
+            <p className="text-neutral-300">
+              {lang === "en" ? activeRule.riskNoteEn : activeRule.riskNoteHa}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <span className="text-neutral-500 flex items-center gap-1">
+              <Sliders className="w-3.5 h-3.5 text-emerald-400" />
+              {lang === "en" ? "Demo drill:" : "Gwaji:"}
+            </span>
+            <button
+              type="button"
+              onClick={() => handleApplyTestReading(2.5, 1.5)}
+              className="px-2.5 py-1 border border-neutral-800 hover:border-amber-400 text-neutral-200 cursor-pointer"
+            >
+              +2.5°C Heat
+            </button>
+            <button
+              type="button"
+              onClick={() => handleApplyTestReading(-2.5, -1.5)}
+              className="px-2.5 py-1 border border-neutral-800 hover:border-sky-400 text-neutral-200 cursor-pointer"
+            >
+              -2.5°C Cool
+            </button>
+          </div>
+        </section>
+
         <section className="space-y-4 border-b border-neutral-800 pb-6">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <div>
@@ -1121,6 +1222,7 @@ export default function App() {
           <div className="flex flex-wrap gap-2">
             {state.products.map((prod) => {
               const isSelected = prod.uid === activeProduct.uid;
+              const pEval = evaluateProduct(prod);
               return (
                 <button
                   key={prod.uid}
@@ -1135,6 +1237,15 @@ export default function App() {
                   }`}
                 >
                   {prod.name} ({prod.temperatureC}°C)
+                  {pEval.level !== "NORMAL" && (
+                    <span
+                      className={`ml-1.5 ${
+                        isSelected ? "text-rose-700" : "text-amber-400"
+                      }`}
+                    >
+                      • !
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -1157,7 +1268,7 @@ export default function App() {
           <FlatReading
             icon={<Activity className="w-4 h-4 text-rose-400" />}
             label="THI"
-            value={`${thi}`}
+            value={`${statusInfo.thi}`}
             hint={`Alert from: ${activeRule.maxThi}`}
           />
           <FlatReading
@@ -1224,7 +1335,9 @@ export default function App() {
               </p>
               <p className="text-neutral-300 text-xs">
                 <strong className="text-emerald-400">
-                  {lang === "en" ? "What to adjust now: " : "Abinda ya kamata a gyara: "}
+                  {lang === "en"
+                    ? "What to adjust now: "
+                    : "Abinda ya kamata a gyara: "}
                 </strong>
                 {specificFallbackRecommendation}
               </p>
