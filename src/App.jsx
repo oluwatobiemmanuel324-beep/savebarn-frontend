@@ -24,6 +24,8 @@ import {
   BookmarkCheck,
   XCircle,
   Sliders,
+  Sparkles,
+  Power,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -38,7 +40,7 @@ import {
 const API_URL =
   import.meta.env.VITE_API_URL || "https://savebarn-backend.onrender.com";
 
-const STORAGE_KEY = "savebarn_pitch_black_v6";
+const STORAGE_KEY = "savebarn_smart_ac_sim_v7";
 
 function generateAutoHardwareId(purpose = "BOTH") {
   const prefix =
@@ -163,35 +165,62 @@ const INITIAL_AC_UNITS = [
   {
     id: "ac-1",
     code: "AC-UNIT-01",
-    name: "East Wall Split AC",
-    rangeMeters: 8.5,
+    name: "East Wall Smart Split AC",
+    zoneLabel: "Pen / Bay A",
+    protocol: "Wi-Fi + IR Bridge",
+    rssi: "-54 dBm",
+    rangeMeters: 6.5,
     power: "ON",
+    mode: "COOL",
     speed: "HIGH",
     targetTemp: 24,
-    reachable: true,
-    lastCommandOk: true,
+    smartAuto: true,
+    discovered: true,
   },
   {
     id: "ac-2",
     code: "AC-UNIT-02",
-    name: "Center Bay Cooling Unit",
-    rangeMeters: 12.0,
+    name: "Center Bay Smart Inverter",
+    zoneLabel: "Main Store / Pen B",
+    protocol: "Wi-Fi Direct",
+    rssi: "-63 dBm",
+    rangeMeters: 11.2,
     power: "ON",
+    mode: "COOL",
     speed: "MEDIUM",
     targetTemp: 23,
-    reachable: true,
-    lastCommandOk: true,
+    smartAuto: false,
+    discovered: true,
   },
   {
     id: "ac-3",
     code: "AC-UNIT-03",
-    name: "Far Shed Auxiliary AC",
-    rangeMeters: 18.4,
+    name: "North Corridor Smart AC",
+    zoneLabel: "Produce / Cooling Bay",
+    protocol: "BLE + IR Node",
+    rssi: "-71 dBm",
+    rangeMeters: 14.0,
     power: "OFF",
+    mode: "FAN",
+    speed: "LOW",
+    targetTemp: 22,
+    smartAuto: false,
+    discovered: false,
+  },
+  {
+    id: "ac-4",
+    code: "AC-UNIT-04",
+    name: "Far Annex Auxiliary AC",
+    zoneLabel: "Outer Shed",
+    protocol: "IR Bridge",
+    rssi: "-89 dBm",
+    rangeMeters: 22.5,
+    power: "OFF",
+    mode: "COOL",
     speed: "LOW",
     targetTemp: 25,
-    reachable: false,
-    lastCommandOk: false,
+    smartAuto: false,
+    discovered: true,
   },
 ];
 
@@ -408,10 +437,19 @@ export default function App() {
       hardwareId: generateAutoHardwareId("BOTH"),
       products: initialProducts,
       activeProductUid: initialProducts[0].uid,
+      environmentRadiusMeters: 15,
       acUnits: INITIAL_AC_UNITS,
       speedDb: INITIAL_SPEED_DB,
       controlFailureNotice: null,
       scanningAcs: false,
+      scanStepMessage: "",
+      acControlLogs: [
+        {
+          id: "log-init-1",
+          time: "Now",
+          text: "AC-UNIT-01 synced in Smart Auto mode (HIGH fan, 24°C target).",
+        },
+      ],
       fieldNote: "",
       savedFieldNotes: [],
     };
@@ -500,9 +538,15 @@ export default function App() {
       .length;
   }, [state.products]);
 
-  const reachableAcCount = useMemo(() => {
-    return state.acUnits.filter((a) => a.reachable).length;
+  const discoveredAcs = useMemo(() => {
+    return state.acUnits.filter((a) => a.discovered);
   }, [state.acUnits]);
+
+  const reachableAcCount = useMemo(() => {
+    return discoveredAcs.filter(
+      (a) => a.rangeMeters <= state.environmentRadiusMeters
+    ).length;
+  }, [discoveredAcs, state.environmentRadiusMeters]);
 
   const matchedDbRecord = useMemo(() => {
     return (
@@ -525,10 +569,21 @@ export default function App() {
       : `Lower draft curtains around ${activeProduct.name}, keep bedding dry, and check for cold air leaks or AC/heater faults.`;
   }, [activeRule.category, activeProduct.name, statusInfo.isHot]);
 
+  const pushControlLog = (prevLogs, text) => {
+    const stamp = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    return [{ id: `${Date.now()}-${Math.random()}`, time: stamp, text }, ...prevLogs].slice(
+      0,
+      6
+    );
+  };
+
   const handleApplyTestReading = (deltaTemp, deltaNh3 = 0) => {
-    setState((prev) => ({
-      ...prev,
-      products: prev.products.map((p) => {
+    setState((prev) => {
+      const updatedProducts = prev.products.map((p) => {
         if (p.uid !== activeProduct.uid) return p;
         const nextTemp = Number(
           Math.max(8, Math.min(44, p.temperatureC + deltaTemp)).toFixed(1)
@@ -551,9 +606,197 @@ export default function App() {
           ammoniaPpm: nextNh3,
           history: [...p.history.slice(-11), point],
         };
-      }),
-    }));
+      });
+
+      const nextActive =
+        updatedProducts.find((p) => p.uid === activeProduct.uid) ||
+        updatedProducts[0];
+      const nextBandRec =
+        prev.speedDb.find(
+          (rec) =>
+            nextActive.temperatureC >= rec.minC &&
+            nextActive.temperatureC <= rec.maxC
+        ) || prev.speedDb[1];
+      const idealTarget = Math.round(
+        (nextActive.rule.minTemp + nextActive.rule.maxTemp) / 2
+      );
+
+      let autoAdjustedCount = 0;
+      const updatedAcs = prev.acUnits.map((ac) => {
+        const inRange = ac.rangeMeters <= prev.environmentRadiusMeters;
+        if (ac.discovered && inRange && ac.smartAuto && ac.power === "ON") {
+          autoAdjustedCount += 1;
+          return {
+            ...ac,
+            speed: nextBandRec.bestSpeed,
+            targetTemp: idealTarget,
+          };
+        }
+        return ac;
+      });
+
+      const nextLogs =
+        autoAdjustedCount > 0
+          ? pushControlLog(
+              prev.acControlLogs,
+              `Smart Auto adjusted ${autoAdjustedCount} in-range AC(s) to ${nextBandRec.bestSpeed} fan / ${idealTarget}°C target for ${nextActive.name} (${nextActive.temperatureC}°C).`
+            )
+          : prev.acControlLogs;
+
+      return {
+        ...prev,
+        products: updatedProducts,
+        acUnits: updatedAcs,
+        acControlLogs: nextLogs,
+      };
+    });
     setLastUpdated(new Date().toLocaleTimeString());
+  };
+
+  const handleDiscoverAirConditioners = () => {
+    setState((prev) => ({
+      ...prev,
+      scanningAcs: true,
+      scanStepMessage: `Probing Wi-Fi / BLE / IR beacons within ${prev.environmentRadiusMeters}m of ${state.farmName}...`,
+    }));
+
+    setTimeout(() => {
+      setState((prev) => {
+        const nextUnits = prev.acUnits.map((ac) => ({
+          ...ac,
+          discovered: true,
+        }));
+        const insideCount = nextUnits.filter(
+          (ac) => ac.rangeMeters <= prev.environmentRadiusMeters
+        ).length;
+        const outsideCount = nextUnits.length - insideCount;
+
+        return {
+          ...prev,
+          scanningAcs: false,
+          scanStepMessage: `Scan complete: ${nextUnits.length} smart AC(s) detected — ${insideCount} inside ${prev.environmentRadiusMeters}m range, ${outsideCount} outside range.`,
+          controlFailureNotice: null,
+          acUnits: nextUnits,
+          acControlLogs: pushControlLog(
+            prev.acControlLogs,
+            `Environment scan found ${insideCount} controllable AC(s) inside ${prev.environmentRadiusMeters}m radius.`
+          ),
+        };
+      });
+      setLastUpdated(new Date().toLocaleTimeString());
+    }, 550);
+  };
+
+  const handleAdjustAc = (acId, patch) => {
+    setState((prev) => {
+      const target = prev.acUnits.find((a) => a.id === acId);
+      if (!target) return prev;
+
+      const inRange = target.rangeMeters <= prev.environmentRadiusMeters;
+      const willFail =
+        !inRange || (target.power === "OFF" && patch.power !== "ON" && !patch.smartAuto);
+
+      if (willFail) {
+        const reason = !inRange
+          ? `${target.code} (${target.name}) is at ${target.rangeMeters}m — outside your ${prev.environmentRadiusMeters}m environment range (signal drop / no reply).`
+          : `${target.code} (${target.name}) is currently OFF — power it ON first before changing mode, target temperature, or fan speed.`;
+
+        return {
+          ...prev,
+          controlFailureNotice: {
+            unitCode: target.code,
+            unitName: target.name,
+            reason,
+          },
+          acControlLogs: pushControlLog(
+            prev.acControlLogs,
+            `Command blocked on ${target.code}: ${
+              !inRange ? "out of range" : "unit is OFF"
+            }.`
+          ),
+        };
+      }
+
+      const nextUnits = prev.acUnits.map((a) => {
+        if (a.id !== acId) return a;
+        const merged = { ...a, ...patch };
+        if (patch.smartAuto) {
+          const idealTarget = Math.round(
+            (activeRule.minTemp + activeRule.maxTemp) / 2
+          );
+          merged.power = "ON";
+          merged.mode = "COOL";
+          merged.speed = matchedDbRecord?.bestSpeed || "MEDIUM";
+          merged.targetTemp = idealTarget;
+        }
+        return merged;
+      });
+
+      const updated = nextUnits.find((a) => a.id === acId);
+      const summary = patch.smartAuto
+        ? `${updated.code} set to Smart Auto (${updated.speed}, ${updated.targetTemp}°C for ${activeProduct.name}).`
+        : `${updated.code} updated -> Power: ${updated.power}, Mode: ${updated.mode}, Fan: ${updated.speed}, Target: ${updated.targetTemp}°C.`;
+
+      return {
+        ...prev,
+        controlFailureNotice: null,
+        acUnits: nextUnits,
+        acControlLogs: pushControlLog(prev.acControlLogs, summary),
+      };
+    });
+    setLastUpdated(new Date().toLocaleTimeString());
+  };
+
+  const handleSaveBestSpeedToDb = (speedToSave) => {
+    const temp = activeProduct.temperatureC;
+    setState((prev) => {
+      const exists = prev.speedDb.some(
+        (rec) => temp >= rec.minC && temp <= rec.maxC
+      );
+      const nextDb = exists
+        ? prev.speedDb.map((rec) =>
+            temp >= rec.minC && temp <= rec.maxC
+              ? {
+                  ...rec,
+                  bestSpeed: speedToSave,
+                  notes: `Updated for ${activeProduct.name} around ${temp}°C.`,
+                }
+              : rec
+          )
+        : [
+            ...prev.speedDb,
+            {
+              id: `db-${Date.now()}`,
+              conditionBand: `${temp}°C Recorded`,
+              minC: temp - 1.5,
+              maxC: temp + 1.5,
+              bestSpeed: speedToSave,
+              notes: `Recorded for ${activeProduct.name} at ${temp}°C.`,
+            },
+          ];
+
+      return {
+        ...prev,
+        speedDb: nextDb,
+        acControlLogs: pushControlLog(
+          prev.acControlLogs,
+          `Saved ${speedToSave} speed to weather DB for ${currentBand}.`
+        ),
+      };
+    });
+  };
+
+  const handleApplyBestSpeedFromDb = (rec) => {
+    const firstInRange =
+      discoveredAcs.find(
+        (a) => a.rangeMeters <= state.environmentRadiusMeters
+      ) || discoveredAcs[0];
+    if (!firstInRange) return;
+    handleAdjustAc(firstInRange.id, {
+      power: "ON",
+      speed: rec.bestSpeed,
+      smartAuto: false,
+    });
   };
 
   const handleGoogleSignIn = (account) => {
@@ -608,103 +851,6 @@ export default function App() {
     setLastUpdated(new Date().toLocaleTimeString());
   };
 
-  const handleDiscoverAirConditioners = () => {
-    setState((prev) => ({ ...prev, scanningAcs: true }));
-    setTimeout(() => {
-      setState((prev) => ({
-        ...prev,
-        scanningAcs: false,
-        controlFailureNotice: null,
-        acUnits: prev.acUnits.map((ac, idx) =>
-          idx === 2 ? { ...ac, reachable: true, lastCommandOk: true } : ac
-        ),
-      }));
-      setLastUpdated(new Date().toLocaleTimeString());
-    }, 450);
-  };
-
-  const handleAdjustAc = (acId, patch) => {
-    setState((prev) => {
-      const target = prev.acUnits.find((a) => a.id === acId);
-      if (!target) return prev;
-
-      const willFail =
-        !target.reachable || (target.power === "OFF" && patch.power !== "ON");
-
-      if (willFail) {
-        return {
-          ...prev,
-          acUnits: prev.acUnits.map((a) =>
-            a.id === acId ? { ...a, ...patch, lastCommandOk: false } : a
-          ),
-          controlFailureNotice: {
-            unitCode: target.code,
-            unitName: target.name,
-            reason: !target.reachable
-              ? `${target.code} (${target.name}) did not reply to the control signal (out of range or signal drop).`
-              : `${target.code} (${target.name}) is OFF—turn power ON before changing fan speed.`,
-          },
-        };
-      }
-
-      return {
-        ...prev,
-        controlFailureNotice: null,
-        acUnits: prev.acUnits.map((a) =>
-          a.id === acId ? { ...a, ...patch, lastCommandOk: true } : a
-        ),
-      };
-    });
-    setLastUpdated(new Date().toLocaleTimeString());
-  };
-
-  const handleSaveBestSpeedToDb = (speedToSave) => {
-    const temp = activeProduct.temperatureC;
-    setState((prev) => {
-      const exists = prev.speedDb.some(
-        (rec) => temp >= rec.minC && temp <= rec.maxC
-      );
-      if (exists) {
-        return {
-          ...prev,
-          speedDb: prev.speedDb.map((rec) =>
-            temp >= rec.minC && temp <= rec.maxC
-              ? {
-                  ...rec,
-                  bestSpeed: speedToSave,
-                  notes: `Updated for ${activeProduct.name} around ${temp}°C.`,
-                }
-              : rec
-          ),
-        };
-      }
-      return {
-        ...prev,
-        speedDb: [
-          ...prev.speedDb,
-          {
-            id: `db-${Date.now()}`,
-            conditionBand: `${temp}°C Recorded`,
-            minC: temp - 1.5,
-            maxC: temp + 1.5,
-            bestSpeed: speedToSave,
-            notes: `Recorded for ${activeProduct.name} at ${temp}°C.`,
-          },
-        ],
-      };
-    });
-  };
-
-  const handleApplyBestSpeedFromDb = (rec) => {
-    const firstReachable =
-      state.acUnits.find((a) => a.reachable) || state.acUnits[0];
-    if (!firstReachable) return;
-    handleAdjustAc(firstReachable.id, {
-      power: "ON",
-      speed: rec.bestSpeed,
-    });
-  };
-
   const handleAddFieldNote = (e) => {
     e.preventDefault();
     const text = state.fieldNote.trim();
@@ -745,10 +891,13 @@ export default function App() {
       hardwareId: generateAutoHardwareId("BOTH"),
       products: fresh,
       activeProductUid: fresh[0].uid,
+      environmentRadiusMeters: 15,
       acUnits: INITIAL_AC_UNITS,
       speedDb: INITIAL_SPEED_DB,
       controlFailureNotice: null,
       scanningAcs: false,
+      scanStepMessage: "",
+      acControlLogs: [],
       fieldNote: "",
       savedFieldNotes: [],
     });
@@ -797,8 +946,8 @@ export default function App() {
             </h1>
             <p className="text-sm text-neutral-400 leading-relaxed">
               {lang === "en"
-                ? "Different animals and stored crops spoil at different temperatures and THI levels. SaveBarn checks each item separately, finds nearby ACs in control range, saves proven AC speeds by weather, and gives honest manual fallback steps when control is unverified."
-                : "Kowane dabba ko amfanin gona na da nasa matakin zafi da THI. SaveBarn na duba su daban-daban, yana nemo AC da ke kusa, yana adana gudun AC bisa yanayi, kuma yana ba da mafita idan na'ura ba ta amsa ba."}
+                ? "Different animals and stored crops spoil at different temperatures and THI levels. SaveBarn checks each item separately, discovers smart ACs within your environment radius, simulates smart climate control, and provides honest manual fallback steps when control is unverified."
+                : "Kowane dabba ko amfanin gona na da nasa matakin zafi da THI. SaveBarn na duba su daban-daban, yana nemo smart AC da ke cikin zango, yana sarrafa su, kuma yana ba da mafita idan na'ura ba ta amsa ba."}
             </p>
           </div>
 
@@ -1171,8 +1320,8 @@ export default function App() {
           <div className="space-y-1">
             <div className="text-neutral-400">
               {lang === "en"
-                ? `Tracking ${state.products.length} separate farm item(s) • ${farmAlertsCount} outside safe/comfort limits • ${reachableAcCount}/${state.acUnits.length} ACs in control range`
-                : `Ana kula da kayayyaki ${state.products.length} daban • ${farmAlertsCount} na bukatar kulawa • ${reachableAcCount}/${state.acUnits.length} AC na cikin zango`}
+                ? `Tracking ${state.products.length} separate farm item(s) • ${farmAlertsCount} outside safe/comfort limits • ${reachableAcCount}/${discoveredAcs.length} discovered smart ACs inside ${state.environmentRadiusMeters}m radius`
+                : `Ana kula da kayayyaki ${state.products.length} daban • ${farmAlertsCount} na bukatar kulawa • ${reachableAcCount}/${discoveredAcs.length} smart AC na cikin zango`}
             </div>
             <p className="text-neutral-300">
               {lang === "en" ? activeRule.riskNoteEn : activeRule.riskNoteHa}
@@ -1279,6 +1428,7 @@ export default function App() {
           />
         </section>
 
+        {/* Smart AC Discovery & Smart Control Simulation */}
         <section className="space-y-4 border-b border-neutral-800 pb-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -1286,38 +1436,69 @@ export default function App() {
                 <Wifi className="w-4 h-4 text-emerald-400" />
                 <span>
                   {lang === "en"
-                    ? "Air conditioners within control range"
-                    : "Na'urorin AC da ke cikin zangon na'ura"}
+                    ? "Smart AC discovery & control simulation"
+                    : "Nemo Smart AC & sarrafa su a gwaji"}
                 </span>
               </h2>
               <p className="text-xs text-neutral-400 mt-0.5">
                 {lang === "en"
-                  ? "Adjust power or fan speed on reachable units. Room temperature is never altered artificially in software."
-                  : "Canza wuta ko gudun iska na AC da ke kusa. Ba a canza yanayin iska da karya a manhaja."}
+                  ? "Scan the stated environment radius for smart conditioners, toggle Smart Auto regulation, or send manual mode/speed/setpoint commands."
+                  : "Bincika zangon da aka ayyana don nemo smart AC, kunna Smart Auto, ko aika umarni kai tsaye."}
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={handleDiscoverAirConditioners}
-              className="inline-flex items-center gap-2 px-4 py-2 border border-neutral-700 hover:border-emerald-400 text-xs sm:text-sm text-white cursor-pointer"
-            >
-              <RefreshCw
-                className={`w-4 h-4 text-emerald-400 ${
-                  state.scanningAcs ? "animate-spin" : ""
-                }`}
-              />
-              <span>
-                {state.scanningAcs
-                  ? lang === "en"
-                    ? "Checking range..."
-                    : "Ana dubawa..."
-                  : lang === "en"
-                  ? "Find ACs in range"
-                  : "Nemo AC a kusa"}
-              </span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 border border-neutral-800 px-2.5 py-1.5 text-xs">
+                <span className="text-neutral-400">Env Radius:</span>
+                {[10, 15, 25].map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() =>
+                      setState((prev) => ({
+                        ...prev,
+                        environmentRadiusMeters: r,
+                      }))
+                    }
+                    className={`px-2 py-0.5 cursor-pointer ${
+                      state.environmentRadiusMeters === r
+                        ? "bg-white text-black font-semibold"
+                        : "text-neutral-300 hover:text-white"
+                    }`}
+                  >
+                    {r}m
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleDiscoverAirConditioners}
+                className="inline-flex items-center gap-2 px-4 py-2 border border-neutral-700 hover:border-emerald-400 text-xs sm:text-sm text-white cursor-pointer"
+              >
+                <RefreshCw
+                  className={`w-4 h-4 text-emerald-400 ${
+                    state.scanningAcs ? "animate-spin" : ""
+                  }`}
+                />
+                <span>
+                  {state.scanningAcs
+                    ? lang === "en"
+                      ? "Scanning environment..."
+                      : "Ana bincike..."
+                    : lang === "en"
+                    ? "Scan environment for Smart ACs"
+                    : "Bincika Smart AC a kusa"}
+                </span>
+              </button>
+            </div>
           </div>
+
+          {state.scanStepMessage && (
+            <p className="text-xs text-emerald-300 border-l-2 border-emerald-500 pl-3 py-1">
+              {state.scanStepMessage}
+            </p>
+          )}
 
           {state.controlFailureNotice && (
             <div className="border-l-2 border-rose-500 pl-4 py-2 space-y-2 text-xs sm:text-sm">
@@ -1345,71 +1526,166 @@ export default function App() {
           )}
 
           <div className="divide-y divide-neutral-800 border-y border-neutral-800">
-            {state.acUnits.map((ac) => (
-              <div
-                key={ac.id}
-                className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4"
-              >
-                <div>
-                  <div className="text-sm font-semibold text-white flex items-center gap-2">
-                    <span>{ac.name}</span>
-                    <span className="font-mono text-xs text-neutral-400">
-                      ({ac.code} • {ac.rangeMeters}m)
-                    </span>
+            {discoveredAcs.map((ac) => {
+              const inRange = ac.rangeMeters <= state.environmentRadiusMeters;
+              return (
+                <div
+                  key={ac.id}
+                  className="py-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4"
+                >
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold text-white flex flex-wrap items-center gap-2">
+                      <span>{ac.name}</span>
+                      <span className="font-mono text-xs text-neutral-400">
+                        ({ac.code} • {ac.zoneLabel})
+                      </span>
+                      <span className="text-[11px] px-2 py-0.5 border border-neutral-800 text-neutral-300">
+                        {ac.protocol} • {ac.rssi}
+                      </span>
+                    </div>
+                    <div className="text-xs flex flex-wrap items-center gap-2">
+                      {inRange ? (
+                        <span className="text-emerald-400">
+                          Inside {state.environmentRadiusMeters}m range ({ac.rangeMeters}m)
+                        </span>
+                      ) : (
+                        <span className="text-rose-400">
+                          Outside {state.environmentRadiusMeters}m range ({ac.rangeMeters}m — no reply)
+                        </span>
+                      )}
+                      <span className="text-neutral-600">•</span>
+                      <span className="text-neutral-400">
+                        Mode: <strong className="text-neutral-200">{ac.mode}</strong> • Setpoint:{" "}
+                        <strong className="text-neutral-200">{ac.targetTemp}°C</strong>
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-xs mt-0.5">
-                    {ac.reachable ? (
-                      <span className="text-emerald-400">In range</span>
-                    ) : (
-                      <span className="text-rose-400">No reply from unit</span>
-                    )}
-                  </div>
-                </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleAdjustAc(ac.id, {
-                        power: ac.power === "ON" ? "OFF" : "ON",
-                      })
-                    }
-                    className={`px-3 py-1.5 text-xs font-semibold border cursor-pointer ${
-                      ac.power === "ON"
-                        ? "border-emerald-500 text-emerald-300"
-                        : "border-neutral-700 text-neutral-400"
-                    }`}
-                  >
-                    {ac.power}
-                  </button>
-
-                  {["LOW", "MEDIUM", "HIGH", "TURBO"].map((spd) => (
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
-                      key={spd}
                       type="button"
-                      onClick={() => handleAdjustAc(ac.id, { speed: spd })}
-                      className={`px-2.5 py-1.5 text-xs border cursor-pointer ${
-                        ac.speed === spd
-                          ? "bg-emerald-500 text-black border-emerald-500 font-semibold"
-                          : "border-neutral-800 text-neutral-300 hover:border-neutral-600"
+                      onClick={() =>
+                        handleAdjustAc(ac.id, {
+                          power: ac.power === "ON" ? "OFF" : "ON",
+                          smartAuto: ac.power === "ON" ? false : ac.smartAuto,
+                        })
+                      }
+                      className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold border cursor-pointer ${
+                        ac.power === "ON"
+                          ? "border-emerald-500 text-emerald-300"
+                          : "border-neutral-700 text-neutral-400"
                       }`}
                     >
-                      {spd}
+                      <Power className="w-3.5 h-3.5" />
+                      <span>{ac.power}</span>
                     </button>
-                  ))}
 
-                  <button
-                    type="button"
-                    onClick={() => handleSaveBestSpeedToDb(ac.speed)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 border border-neutral-700 hover:border-emerald-400 text-xs text-emerald-300 cursor-pointer"
-                  >
-                    <BookmarkCheck className="w-3.5 h-3.5" />
-                    <span>Save {ac.speed}</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleAdjustAc(ac.id, { smartAuto: !ac.smartAuto })
+                      }
+                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs border cursor-pointer ${
+                        ac.smartAuto
+                          ? "bg-white text-black border-white font-semibold"
+                          : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Smart Auto</span>
+                    </button>
+
+                    <div className="flex items-center border border-neutral-800 text-xs">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleAdjustAc(ac.id, {
+                            targetTemp: Math.max(16, ac.targetTemp - 1),
+                            smartAuto: false,
+                          })
+                        }
+                        className="px-2 py-1.5 text-neutral-300 hover:text-white cursor-pointer"
+                      >
+                        -1°
+                      </button>
+                      <span className="px-2 font-mono text-white">
+                        {ac.targetTemp}°C
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleAdjustAc(ac.id, {
+                            targetTemp: Math.min(30, ac.targetTemp + 1),
+                            smartAuto: false,
+                          })
+                        }
+                        className="px-2 py-1.5 text-neutral-300 hover:text-white cursor-pointer"
+                      >
+                        +1°
+                      </button>
+                    </div>
+
+                    {["COOL", "FAN", "DRY"].map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() =>
+                          handleAdjustAc(ac.id, { mode: m, smartAuto: false })
+                        }
+                        className={`px-2 py-1.5 text-xs border cursor-pointer ${
+                          ac.mode === m
+                            ? "border-sky-400 text-sky-300"
+                            : "border-neutral-800 text-neutral-400 hover:border-neutral-600"
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+
+                    {["LOW", "MEDIUM", "HIGH", "TURBO"].map((spd) => (
+                      <button
+                        key={spd}
+                        type="button"
+                        onClick={() =>
+                          handleAdjustAc(ac.id, { speed: spd, smartAuto: false })
+                        }
+                        className={`px-2.5 py-1.5 text-xs border cursor-pointer ${
+                          ac.speed === spd
+                            ? "bg-emerald-500 text-black border-emerald-500 font-semibold"
+                            : "border-neutral-800 text-neutral-300 hover:border-neutral-600"
+                        }`}
+                      >
+                        {spd}
+                      </button>
+                    ))}
+
+                    <button
+                      type="button"
+                      onClick={() => handleSaveBestSpeedToDb(ac.speed)}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 border border-neutral-700 hover:border-emerald-400 text-xs text-emerald-300 cursor-pointer"
+                    >
+                      <BookmarkCheck className="w-3.5 h-3.5" />
+                      <span>Save {ac.speed}</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
+
+          {state.acControlLogs.length > 0 && (
+            <div className="space-y-1 text-xs text-neutral-400">
+              <div className="uppercase tracking-wider text-[11px] text-neutral-500">
+                Smart Control Activity Feed
+              </div>
+              {state.acControlLogs.map((item) => (
+                <div key={item.id}>
+                  <span className="text-neutral-500 font-mono">[{item.time}]</span>{" "}
+                  <span className="text-neutral-300">{item.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-8 border-b border-neutral-800 pb-8">
