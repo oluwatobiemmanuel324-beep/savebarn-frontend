@@ -11,14 +11,6 @@ import {
   Languages,
   RefreshCw,
   Cpu,
-  Sliders,
-  Fan,
-  Flame,
-  CloudRain,
-  Columns,
-  Sparkles,
-  Minus,
-  Plus,
   Sprout,
   Beef,
   Layers,
@@ -27,6 +19,10 @@ import {
   LogOut,
   Check,
   BookOpen,
+  Wifi,
+  Database,
+  BookmarkCheck,
+  XCircle,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -41,7 +37,7 @@ import {
 const API_URL =
   import.meta.env.VITE_API_URL || "https://savebarn-backend.onrender.com";
 
-const STORAGE_KEY = "savebarn_multi_product_v2";
+const STORAGE_KEY = "savebarn_humanized_black_v4";
 
 function generateAutoHardwareId(purpose = "BOTH") {
   const prefix =
@@ -145,42 +141,74 @@ const CATALOG = [
   },
 ];
 
-const INITIAL_CONTROLS = [
+const INITIAL_AC_UNITS = [
   {
-    id: "ctrl-fan",
-    key: "fan",
-    nameEn: "Exhaust & Cooling Fan",
-    nameHa: "Fankar Cire Zafi & Iska",
-    type: "COOLING",
-    mode: "IN_FAVOR",
-    active: true,
+    id: "ac-1",
+    code: "AC-UNIT-01",
+    name: "East Wall Split AC",
+    rangeMeters: 8.5,
+    power: "ON",
+    speed: "HIGH",
+    targetTemp: 24,
+    reachable: true,
+    lastCommandOk: true,
   },
   {
-    id: "ctrl-mist",
-    key: "mist",
-    nameEn: "Mist / Humidity & Cooling Unit",
-    nameHa: "Na'urar Sanyaya & Danshi",
-    type: "COOLING",
-    mode: "IN_FAVOR",
-    active: false,
+    id: "ac-2",
+    code: "AC-UNIT-02",
+    name: "Center Bay Cooling Unit",
+    rangeMeters: 12.0,
+    power: "ON",
+    speed: "MEDIUM",
+    targetTemp: 23,
+    reachable: true,
+    lastCommandOk: true,
   },
   {
-    id: "ctrl-heater",
-    key: "heater",
-    nameEn: "Thermal Heater / Warmer",
-    nameHa: "Na'urar Dumama",
-    type: "HEATING",
-    mode: "IN_FAVOR",
-    active: false,
+    id: "ac-3",
+    code: "AC-UNIT-03",
+    name: "Far Shed Auxiliary AC",
+    rangeMeters: 18.4,
+    power: "OFF",
+    speed: "LOW",
+    targetTemp: 25,
+    reachable: false,
+    lastCommandOk: false,
+  },
+];
+
+const INITIAL_SPEED_DB = [
+  {
+    id: "db-1",
+    conditionBand: "Cool (< 20°C)",
+    minC: -10,
+    maxC: 19.9,
+    bestSpeed: "LOW",
+    notes: "Keeps air gentle so stock aren't chilled and stored crops don't sweat.",
   },
   {
-    id: "ctrl-curtain",
-    key: "curtain",
-    nameEn: "Airflow Vent / Louver",
-    nameHa: "Mashigar Iska",
-    type: "AIRFLOW",
-    mode: "IN_FAVOR",
-    active: true,
+    id: "db-2",
+    conditionBand: "Mild (20°C – 26°C)",
+    minC: 20,
+    maxC: 26,
+    bestSpeed: "LOW",
+    notes: "Steady light airflow without wasting power.",
+  },
+  {
+    id: "db-3",
+    conditionBand: "Warm (27°C – 31°C)",
+    minC: 27,
+    maxC: 31,
+    bestSpeed: "MEDIUM",
+    notes: "Helps push back afternoon heat in pens and stores.",
+  },
+  {
+    id: "db-4",
+    conditionBand: "Hot (> 31°C)",
+    minC: 31.1,
+    maxC: 60,
+    bestSpeed: "TURBO",
+    notes: "Stronger airflow when heat climbs high.",
   },
 ];
 
@@ -190,16 +218,23 @@ function computeTHI(tempC, rh) {
   );
 }
 
+function getWeatherBand(tempC) {
+  if (tempC < 20) return "Cool (< 20°C)";
+  if (tempC <= 26) return "Mild (20°C – 26°C)";
+  if (tempC <= 31) return "Warm (27°C – 31°C)";
+  return "Hot (> 31°C)";
+}
+
 function createHistory(tempC, rh, nh3) {
   const labels = ["-20m", "-16m", "-12m", "-8m", "-4m", "Now"];
   return labels.map((time, idx) => {
-    const offset = (labels.length - 1 - idx) * 0.4;
+    const offset = (labels.length - 1 - idx) * 0.35;
     const t = Number((tempC - offset).toFixed(1));
     return {
       time,
       Temp: t,
       THI: computeTHI(t, rh),
-      Ammonia: Number(Math.max(1, nh3 - offset * 0.4).toFixed(1)),
+      Ammonia: Number(Math.max(1, nh3 - offset * 0.3).toFixed(1)),
     };
   });
 }
@@ -327,12 +362,17 @@ export default function App() {
       hardwareId: generateAutoHardwareId("LIVESTOCK"),
       products: initialProducts,
       activeProductUid: initialProducts[0].uid,
-      controls: INITIAL_CONTROLS,
+      acUnits: INITIAL_AC_UNITS,
+      speedDb: INITIAL_SPEED_DB,
+      controlFailureNotice: null,
+      scanningAcs: false,
+      fieldNote: "",
+      savedFieldNotes: [],
     };
   });
 
   const [lastUpdated, setLastUpdated] = useState(new Date().toLocaleTimeString());
-  const [syncLabel, setSyncLabel] = useState("Interactive Ready");
+  const [syncLabel, setSyncLabel] = useState("Live Sensor Ready");
 
   useEffect(() => {
     try {
@@ -343,19 +383,49 @@ export default function App() {
   useEffect(() => {
     if (state.stage !== "DASHBOARD") return;
     let active = true;
-    const checkCloud = async () => {
+    const syncTelemetry = async () => {
       try {
         const res = await fetch(`${API_URL}/api/dashboard`);
-        if (res.ok && active) setSyncLabel("Cloud Connected");
+        if (!res.ok) return;
+        const data = await res.json();
+        const r = data?.zones?.[0]?.readings?.[0];
+        if (!active || !r) return;
+        setSyncLabel("Cloud Connected");
+        setLastUpdated(new Date().toLocaleTimeString());
+        setState((prev) => ({
+          ...prev,
+          products: prev.products.map((prod, idx) => {
+            if (idx !== 0) return prod;
+            const nextTemp = Number(r.temperatureC ?? prod.temperatureC);
+            const nextRh = Number(r.humidityPct ?? prod.humidityPct);
+            const nextNh3 = Number(r.ammoniaPpm ?? prod.ammoniaPpm);
+            const point = {
+              time: new Date().toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              }),
+              Temp: nextTemp,
+              THI: computeTHI(nextTemp, nextRh),
+              Ammonia: nextNh3,
+            };
+            return {
+              ...prod,
+              temperatureC: nextTemp,
+              humidityPct: nextRh,
+              ammoniaPpm: nextNh3,
+              history: [...prod.history.slice(-11), point],
+            };
+          }),
+        }));
       } catch (_) {
-        if (active) setSyncLabel("Interactive Sim");
+        if (active) setSyncLabel("Field Mode");
       }
     };
-    checkCloud();
-    const timer = setInterval(checkCloud, 12000);
+    syncTelemetry();
+    const t = setInterval(syncTelemetry, 10000);
     return () => {
       active = false;
-      clearInterval(timer);
+      clearInterval(t);
     };
   }, [state.stage]);
 
@@ -377,6 +447,17 @@ export default function App() {
 
   const activeRule = activeProduct?.rule || CATALOG[0];
   const thi = computeTHI(activeProduct.temperatureC, activeProduct.humidityPct);
+  const currentBand = getWeatherBand(activeProduct.temperatureC);
+
+  const matchedDbRecord = useMemo(() => {
+    return (
+      state.speedDb.find(
+        (rec) =>
+          activeProduct.temperatureC >= rec.minC &&
+          activeProduct.temperatureC <= rec.maxC
+      ) || state.speedDb[1]
+    );
+  }, [state.speedDb, activeProduct.temperatureC]);
 
   const statusInfo = useMemo(() => {
     const tempOut =
@@ -387,7 +468,10 @@ export default function App() {
     const isHot = activeProduct.temperatureC > activeRule.maxTemp;
     const isCold = activeProduct.temperatureC < activeRule.minTemp;
 
-    if (activeProduct.temperatureC > activeRule.maxTemp + 4 || thi >= activeRule.maxThi + 5) {
+    if (
+      activeProduct.temperatureC > activeRule.maxTemp + 4 ||
+      thi >= activeRule.maxThi + 5
+    ) {
       return { level: "EMERGENCY", isHot, isCold };
     }
     if (tempOut || thiHigh || nh3High) {
@@ -395,6 +479,17 @@ export default function App() {
     }
     return { level: "NORMAL", isHot: false, isCold: false };
   }, [activeProduct.temperatureC, activeProduct.ammoniaPpm, thi, activeRule]);
+
+  const specificFallbackRecommendation = useMemo(() => {
+    if (activeRule.category === "CROPS") {
+      return statusInfo.isHot
+        ? `Open shaded storage vents, improve airflow around ${activeProduct.name} stacks, clean AC dust filters, and move heat-sensitive produce to a cooler shaded spot.`
+        : `Close cold draft openings around ${activeProduct.name} storage, keep bags or crates off damp floors on pallets, and watch for moisture buildup.`;
+    }
+    return statusInfo.isHot
+      ? `Open side curtains or vents, shade sun-facing roofing above ${activeProduct.name}, make sure cool drinking water is available, and check AC power or signal path.`
+      : `Lower draft curtains around ${activeProduct.name}, keep bedding dry, and check for cold air leaks or AC/heater faults.`;
+  }, [activeRule.category, activeProduct.name, statusInfo.isHot]);
 
   const handleGoogleSignIn = (account) => {
     setState((prev) => ({
@@ -448,103 +543,122 @@ export default function App() {
     setLastUpdated(new Date().toLocaleTimeString());
   };
 
-  const updateActiveProductTemp = (nextTemp) => {
-    const clamped = Number(Math.max(4, Math.min(45, nextTemp)).toFixed(1));
-    setState((prev) => ({
-      ...prev,
-      products: prev.products.map((prod) => {
-        if (prod.uid !== activeProduct.uid) return prod;
-        const point = {
-          time: new Date().toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          }),
-          Temp: clamped,
-          THI: computeTHI(clamped, prod.humidityPct),
-          Ammonia: prod.ammoniaPpm,
-        };
+  const handleDiscoverAirConditioners = () => {
+    setState((prev) => ({ ...prev, scanningAcs: true }));
+    setTimeout(() => {
+      setState((prev) => ({
+        ...prev,
+        scanningAcs: false,
+        controlFailureNotice: null,
+        acUnits: prev.acUnits.map((ac, idx) =>
+          idx === 2 ? { ...ac, reachable: true, lastCommandOk: true } : ac
+        ),
+      }));
+      setLastUpdated(new Date().toLocaleTimeString());
+    }, 450);
+  };
+
+  const handleAdjustAc = (acId, patch) => {
+    setState((prev) => {
+      const target = prev.acUnits.find((a) => a.id === acId);
+      if (!target) return prev;
+
+      const willFail =
+        !target.reachable || (target.power === "OFF" && patch.power !== "ON");
+
+      if (willFail) {
         return {
-          ...prod,
-          temperatureC: clamped,
-          history: [...prod.history.slice(-11), point],
+          ...prev,
+          acUnits: prev.acUnits.map((a) =>
+            a.id === acId ? { ...a, ...patch, lastCommandOk: false } : a
+          ),
+          controlFailureNotice: {
+            unitCode: target.code,
+            unitName: target.name,
+            reason: !target.reachable
+              ? `${target.code} (${target.name}) did not reply to the control signal (out of range or signal drop).`
+              : `${target.code} (${target.name}) is OFF—turn power ON before changing fan speed.`,
+          },
         };
-      }),
-    }));
-    setLastUpdated(new Date().toLocaleTimeString());
-  };
-
-  const stepTemperature = (delta) => {
-    updateActiveProductTemp(Number(activeProduct.temperatureC) + delta);
-  };
-
-  const toggleControlMode = (id) => {
-    setState((prev) => ({
-      ...prev,
-      controls: prev.controls.map((c) =>
-        c.id === id
-          ? { ...c, mode: c.mode === "IN_FAVOR" ? "AGAINST" : "IN_FAVOR", active: true }
-          : c
-      ),
-    }));
-  };
-
-  const toggleControlPower = (id) => {
-    setState((prev) => ({
-      ...prev,
-      controls: prev.controls.map((c) =>
-        c.id === id ? { ...c, active: !c.active } : c
-      ),
-    }));
-  };
-
-  const simulateRegulatorEffect = () => {
-    let deltaTemp = 0;
-    let deltaNh3 = 0;
-
-    state.controls.forEach((ctrl) => {
-      if (!ctrl.active) return;
-      const sign = ctrl.mode === "IN_FAVOR" ? 1 : -1;
-      if (ctrl.type === "COOLING") {
-        deltaTemp += statusInfo.isHot ? -1.5 * sign : -0.8 * sign;
-      } else if (ctrl.type === "HEATING") {
-        deltaTemp += statusInfo.isCold ? 1.5 * sign : 1.0 * sign;
-      } else if (ctrl.type === "AIRFLOW") {
-        deltaNh3 += -1.5 * sign;
-        deltaTemp += statusInfo.isHot ? -0.6 * sign : -0.3 * sign;
       }
+
+      return {
+        ...prev,
+        controlFailureNotice: null,
+        acUnits: prev.acUnits.map((a) =>
+          a.id === acId ? { ...a, ...patch, lastCommandOk: true } : a
+        ),
+      };
     });
+    setLastUpdated(new Date().toLocaleTimeString());
+  };
 
-    const nextTemp = Number(
-      Math.max(4, Math.min(45, activeProduct.temperatureC + deltaTemp)).toFixed(1)
-    );
-    const nextNh3 = Number(
-      Math.max(1, Math.min(45, activeProduct.ammoniaPpm + deltaNh3)).toFixed(1)
-    );
+  const handleSaveBestSpeedToDb = (speedToSave) => {
+    const temp = activeProduct.temperatureC;
+    setState((prev) => {
+      const exists = prev.speedDb.some(
+        (rec) => temp >= rec.minC && temp <= rec.maxC
+      );
+      if (exists) {
+        return {
+          ...prev,
+          speedDb: prev.speedDb.map((rec) =>
+            temp >= rec.minC && temp <= rec.maxC
+              ? {
+                  ...rec,
+                  bestSpeed: speedToSave,
+                  notes: `Updated for ${activeProduct.name} around ${temp}°C.`,
+                }
+              : rec
+          ),
+        };
+      }
+      return {
+        ...prev,
+        speedDb: [
+          ...prev.speedDb,
+          {
+            id: `db-${Date.now()}`,
+            conditionBand: `${temp}°C Recorded`,
+            minC: temp - 1.5,
+            maxC: temp + 1.5,
+            bestSpeed: speedToSave,
+            notes: `Recorded for ${activeProduct.name} at ${temp}°C.`,
+          },
+        ],
+      };
+    });
+  };
 
+  const handleApplyBestSpeedFromDb = (rec) => {
+    const firstReachable =
+      state.acUnits.find((a) => a.reachable) || state.acUnits[0];
+    if (!firstReachable) return;
+    handleAdjustAc(firstReachable.id, {
+      power: "ON",
+      speed: rec.bestSpeed,
+    });
+  };
+
+  const handleAddFieldNote = (e) => {
+    e.preventDefault();
+    const text = state.fieldNote.trim();
+    if (!text) return;
+    const entry = {
+      id: Date.now(),
+      productName: activeProduct.name,
+      tempC: activeProduct.temperatureC,
+      time: new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+      text,
+    };
     setState((prev) => ({
       ...prev,
-      products: prev.products.map((prod) => {
-        if (prod.uid !== activeProduct.uid) return prod;
-        const point = {
-          time: new Date().toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          }),
-          Temp: nextTemp,
-          THI: computeTHI(nextTemp, prod.humidityPct),
-          Ammonia: nextNh3,
-        };
-        return {
-          ...prod,
-          temperatureC: nextTemp,
-          ammoniaPpm: nextNh3,
-          history: [...prod.history.slice(-11), point],
-        };
-      }),
+      fieldNote: "",
+      savedFieldNotes: [entry, ...prev.savedFieldNotes].slice(0, 6),
     }));
-    setLastUpdated(new Date().toLocaleTimeString());
   };
 
   const handleSignOut = () => {
@@ -566,51 +680,58 @@ export default function App() {
       hardwareId: generateAutoHardwareId("LIVESTOCK"),
       products: fresh,
       activeProductUid: fresh[0].uid,
-      controls: INITIAL_CONTROLS,
+      acUnits: INITIAL_AC_UNITS,
+      speedDb: INITIAL_SPEED_DB,
+      controlFailureNotice: null,
+      scanningAcs: false,
+      fieldNote: "",
+      savedFieldNotes: [],
     });
   };
 
-  // 1. GOOGLE SIGNUP SCREEN FIRST
   if (state.stage === "SIGNUP") {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between p-4 sm:p-8">
-        <div className="max-w-5xl w-full mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-bold">
-              SB
-            </div>
-            <div>
-              <span className="font-bold text-lg text-white">SaveBarn</span>
-              <p className="text-xs text-slate-400">
-                Livestock & Crop Storage Climate Intelligence
-              </p>
-            </div>
+      <div className="min-h-screen bg-black text-neutral-100 flex flex-col justify-between px-5 py-6 sm:px-10">
+        <div className="max-w-4xl w-full mx-auto flex items-center justify-between border-b border-neutral-800 pb-4">
+          <div className="flex items-center gap-2.5">
+            <span className="text-emerald-400 font-bold text-lg">SaveBarn</span>
+            <span className="text-neutral-600">/</span>
+            <span className="text-xs text-neutral-400">
+              {lang === "en"
+                ? "Everyday Farm & Storage Climate Log"
+                : "Kula Da Yanayin Gona Da Ajiya"}
+            </span>
           </div>
 
           <button
             type="button"
             onClick={() =>
-              setState((prev) => ({ ...prev, lang: prev.lang === "en" ? "ha" : "en" }))
+              setState((prev) => ({
+                ...prev,
+                lang: prev.lang === "en" ? "ha" : "en",
+              }))
             }
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-medium text-slate-300 cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-800 hover:border-neutral-600 text-xs text-neutral-200 cursor-pointer"
           >
-            <Languages className="w-4 h-4 text-emerald-400" />
+            <Languages className="w-3.5 h-3.5 text-emerald-400" />
             {lang === "en" ? "Hausa" : "English"}
           </button>
         </div>
 
-        <div className="max-w-md w-full mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-6 my-8">
-          <div className="text-center space-y-2">
-            <span className="inline-block text-xs font-semibold px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-              {lang === "en" ? "Sign Up With Google" : "Yi Rajista Da Google"}
-            </span>
-            <h1 className="text-2xl font-bold text-white">
-              {lang === "en" ? "Welcome to SaveBarn" : "Barka Da Zuwa SaveBarn"}
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-400">
+        <div className="max-w-lg w-full mx-auto py-12 space-y-6">
+          <div className="space-y-2">
+            <p className="text-xs uppercase tracking-widest text-emerald-400">
+              {lang === "en" ? "Start With Google" : "Fara Da Google"}
+            </p>
+            <h1 className="text-3xl sm:text-4xl font-semibold text-white tracking-tight">
               {lang === "en"
-                ? "Sign up with Google first to select your farming type, products, and farm name."
-                : "Yi rajista da Google tukuna don zaɓar nau'in noma, amfani, da sunan gona."}
+                ? "Keep your pens and stores in a safe zone."
+                : "Kiyaye dabbobinka da amfanin gonarka a yanayi mai kyau."}
+            </h1>
+            <p className="text-sm text-neutral-400 leading-relaxed">
+              {lang === "en"
+                ? "Sign in with Google to set up your farm, list each animal or crop separately, check nearby ACs, and keep notes on what works best."
+                : "Shiga da Google don saita gonarka, raba kowane dabba ko amfanin gona, duba AC da ke kusa, da rubuta bayanan kula."}
             </p>
           </div>
 
@@ -622,7 +743,7 @@ export default function App() {
                 email: "operator.farm@gmail.com",
               })
             }
-            className="w-full py-3 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-semibold text-sm flex items-center justify-center gap-3 transition cursor-pointer"
+            className="w-full py-3.5 px-5 bg-white hover:bg-neutral-200 text-black font-semibold text-sm flex items-center justify-center gap-3 transition cursor-pointer"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
               <path
@@ -643,78 +764,72 @@ export default function App() {
               />
             </svg>
             <span>
-              {lang === "en" ? "Sign Up with Google" : "Yi Rajista Da Google"}
+              {lang === "en" ? "Continue with Google" : "Ci gaba da Google"}
             </span>
           </button>
         </div>
 
-        <div className="max-w-5xl w-full mx-auto text-center text-xs text-slate-500">
-          SaveBarn • Verified Agricultural & Veterinary Climate Reference
+        <div className="max-w-4xl w-full mx-auto border-t border-neutral-900 pt-4 text-xs text-neutral-500 flex justify-between">
+          <span>SaveBarn</span>
+          <span>FAO & Veterinary Climate Benchmarks</span>
         </div>
       </div>
     );
   }
 
-  // 2. ONBOARDING STEP 1: FARMING PURPOSE
   if (state.stage === "ONBOARD_PURPOSE") {
     const options = [
       {
         id: "LIVESTOCK",
         icon: Beef,
-        titleEn: "Livestock Farming",
+        titleEn: "Livestock",
         titleHa: "Kiwon Dabbobi",
-        descEn: "Monitor temperature, THI heat stress, and ammonia for livestock pens.",
-        descHa: "Kula da zafi, THI, da ammonia na gidajen dabbobi.",
+        descEn: "Track pens for heat, THI, and ammonia.",
+        descHa: "Kula da zafi, THI, da ammonia a gidajen dabbobi.",
       },
       {
         id: "CROPS",
         icon: Sprout,
-        titleEn: "Crop Preservation",
+        titleEn: "Crop Storage",
         titleHa: "Ajiyar Amfanin Gona",
-        descEn: "Monitor storage temperature and humidity to preserve grains, tubers, or produce.",
-        descHa: "Kula da zafi da danshi don adana hatsi, doya, ko kayan lambu.",
+        descEn: "Watch grain, tuber, or produce rooms.",
+        descHa: "Kula da dakin ajiyar hatsi, doya, ko kayan lambu.",
       },
       {
         id: "BOTH",
         icon: Layers,
-        titleEn: "Both (Livestock & Crops)",
-        titleHa: "Duk Biyu (Dabbobi & Amfanin Gona)",
-        descEn: "Track livestock and crop storage as separate products with their own rules.",
-        descHa: "Kula da dabbobi da amfanin gona a matsayin kayayyaki daban-daban.",
+        titleEn: "Both",
+        titleHa: "Duk Biyu",
+        descEn: "Keep livestock and crops as separate items.",
+        descHa: "Ajiye dabbobi da amfanin gona daban-daban.",
       },
     ];
 
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 sm:p-8">
-        <div className="max-w-3xl w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-6">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+      <div className="min-h-screen bg-black text-neutral-100 px-5 py-8 sm:px-10">
+        <div className="max-w-3xl mx-auto space-y-8">
+          <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
             <div>
-              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-                {lang === "en" ? "Onboarding • Step 1 of 2" : "Saitawa • Mataki 1 na 2"}
+              <span className="text-xs text-emerald-400 uppercase tracking-wider">
+                {lang === "en" ? "Step 1 of 2" : "Mataki 1 na 2"}
               </span>
-              <h1 className="text-2xl font-bold text-white mt-1">
+              <h1 className="text-2xl font-semibold text-white mt-1">
                 {lang === "en"
-                  ? "Which farming will you use SaveBarn for?"
-                  : "Wane irin noma zaka yi amfani da SaveBarn a kai?"}
+                  ? "What are you using SaveBarn for?"
+                  : "Me kake amfani da SaveBarn a kai?"}
               </h1>
-              <p className="text-xs text-slate-400 mt-1">
-                {lang === "en"
-                  ? "Select Livestock Farming, Crop Preservation, or Both."
-                  : "Zaɓi Kiwon Dabbobi, Ajiyar Amfanin Gona, ko Duk Biyu."}
-              </p>
             </div>
-
             <button
               type="button"
               onClick={handleSignOut}
-              className="text-xs text-slate-400 hover:text-white flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 cursor-pointer"
+              className="text-xs text-neutral-400 hover:text-white flex items-center gap-1 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>{lang === "en" ? "Sign Out" : "Fita"}</span>
+              <span>{lang === "en" ? "Sign out" : "Fita"}</span>
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="divide-y divide-neutral-800 border-y border-neutral-800">
             {options.map((opt) => {
               const Icon = opt.icon;
               const selected = state.purpose === opt.id;
@@ -723,42 +838,50 @@ export default function App() {
                   key={opt.id}
                   type="button"
                   onClick={() => handleSelectPurpose(opt.id)}
-                  className={`text-left rounded-2xl border p-5 space-y-3 transition cursor-pointer ${
+                  className={`w-full py-5 px-3 flex items-center justify-between text-left transition cursor-pointer ${
                     selected
-                      ? "bg-emerald-500/15 border-emerald-500 text-white"
-                      : "bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700"
+                      ? "bg-neutral-950 text-white"
+                      : "text-neutral-300 hover:bg-neutral-950/60"
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="p-2.5 rounded-xl bg-slate-800 text-emerald-400">
-                      <Icon className="w-5 h-5" />
-                    </span>
-                    {selected && (
-                      <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center">
-                        <Check className="w-4 h-4 stroke-[3]" />
-                      </span>
-                    )}
+                  <div className="flex items-start gap-3.5">
+                    <Icon
+                      className={`w-5 h-5 mt-0.5 ${
+                        selected ? "text-emerald-400" : "text-neutral-500"
+                      }`}
+                    />
+                    <div>
+                      <div className="font-semibold text-base">
+                        {lang === "en" ? opt.titleEn : opt.titleHa}
+                      </div>
+                      <p className="text-xs text-neutral-400 mt-0.5">
+                        {lang === "en" ? opt.descEn : opt.descHa}
+                      </p>
+                    </div>
                   </div>
-                  <div className="font-bold text-base">
-                    {lang === "en" ? opt.titleEn : opt.titleHa}
-                  </div>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    {lang === "en" ? opt.descEn : opt.descHa}
-                  </p>
+                  <span
+                    className={`w-5 h-5 flex items-center justify-center border ${
+                      selected
+                        ? "bg-emerald-400 border-emerald-400 text-black"
+                        : "border-neutral-700"
+                    }`}
+                  >
+                    {selected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                  </span>
                 </button>
               );
             })}
           </div>
 
-          <div className="flex justify-end pt-2">
+          <div className="flex justify-end">
             <button
               type="button"
               onClick={() =>
                 setState((prev) => ({ ...prev, stage: "ONBOARD_DETAILS" }))
               }
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition cursor-pointer"
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm cursor-pointer"
             >
-              <span>{lang === "en" ? "Next: Farm & Products" : "Na Gaba: Gona & Amfani"}</span>
+              <span>{lang === "en" ? "Next" : "Na Gaba"}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
@@ -767,43 +890,39 @@ export default function App() {
     );
   }
 
-  // 3. ONBOARDING STEP 2: FARM NAME, PRODUCTS (MULTI-SELECT) & AUTO HARDWARE ID
   if (state.stage === "ONBOARD_DETAILS") {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 sm:p-8">
+      <div className="min-h-screen bg-black text-neutral-100 px-5 py-8 sm:px-10">
         <form
           onSubmit={handleFinishOnboarding}
-          className="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-5"
+          className="max-w-2xl mx-auto space-y-6"
         >
-          <div className="border-b border-slate-800 pb-4">
-            <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-              {lang === "en" ? "Onboarding • Step 2 of 2" : "Saitawa • Mataki 2 na 2"}
+          <div className="border-b border-neutral-800 pb-4">
+            <span className="text-xs text-emerald-400 uppercase tracking-wider">
+              {lang === "en" ? "Step 2 of 2" : "Mataki 2 na 2"}
             </span>
-            <h1 className="text-2xl font-bold text-white mt-1">
+            <h1 className="text-2xl font-semibold text-white mt-1">
               {lang === "en"
-                ? "Farm Name, Products & Auto Hardware ID"
-                : "Sunan Gona, Kayayyaki & Lambar Na'ura"}
+                ? "Farm details & separate products"
+                : "Bayanan gona & kayayyaki daban-daban"}
             </h1>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-xs text-neutral-400 mt-1">
               {lang === "en"
-                ? "Select one or more products—each one appears as a separate product on your dashboard with its own climate range."
-                : "Zaɓi abu ɗaya ko fiye—kowane zai bayyana a matsayin samfur daban a dashboard tare da nasa ka'idojin yanayi."}
+                ? "Each item you pick becomes its own tab with its own safe temperature range."
+                : "Kowane abu da ka zaɓa zai zama shafi daban da nasa matakin zafi."}
             </p>
           </div>
 
-          <div className="bg-slate-950 border border-emerald-500/40 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3 border-b border-neutral-800">
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-emerald-400 font-semibold flex items-center gap-1.5">
-                <Cpu className="w-3.5 h-3.5" />
-                {lang === "en"
-                  ? "Auto-Generated Unique Hardware ID"
-                  : "Lambar Na'ura Ta Kai Tsaye (Auto ID)"}
+              <div className="text-[11px] uppercase tracking-wider text-neutral-400 flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+                {lang === "en" ? "Hardware ID" : "Lambar Na'ura"}
               </div>
-              <div className="text-lg font-mono font-bold text-white mt-1">
+              <div className="font-mono text-base font-semibold text-white mt-0.5">
                 {state.hardwareId}
               </div>
             </div>
-
             <button
               type="button"
               onClick={() =>
@@ -812,15 +931,15 @@ export default function App() {
                   hardwareId: generateAutoHardwareId(prev.purpose),
                 }))
               }
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-200 cursor-pointer"
+              className="px-3 py-1.5 border border-neutral-700 hover:border-neutral-500 text-xs text-neutral-200 cursor-pointer"
             >
-              {lang === "en" ? "Regenerate ID" : "Sabo ID"}
+              {lang === "en" ? "New ID" : "Sabo ID"}
             </button>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
-              {lang === "en" ? "Farm Name *" : "Sunan Gona *"}
+            <label className="block text-xs text-neutral-300 mb-1.5">
+              {lang === "en" ? "Farm name *" : "Sunan gona *"}
             </label>
             <input
               type="text"
@@ -829,18 +948,18 @@ export default function App() {
               onChange={(e) =>
                 setState((prev) => ({ ...prev, farmName: e.target.value }))
               }
-              placeholder="e.g., GreenValley Agro Farm"
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white"
+              placeholder="e.g., Keffi Valley Farm"
+              className="w-full bg-black border border-neutral-700 focus:border-emerald-400 outline-none px-3.5 py-2.5 text-sm text-white"
             />
           </div>
 
           <div className="space-y-2">
-            <label className="block text-xs font-medium text-slate-300">
+            <label className="block text-xs text-neutral-300">
               {lang === "en"
-                ? "Kind of Farm Product(s) — Select all that apply"
-                : "Nau'in Amfanin Gona / Dabba (Zaɓi duk waɗanda kake da su)"}
+                ? "Select one or more items"
+                : "Zaɓi abu ɗaya ko fiye"}
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {filteredCatalog.map((item) => {
                 const checked = state.selectedProductIds.includes(item.id);
                 return (
@@ -848,21 +967,21 @@ export default function App() {
                     key={item.id}
                     type="button"
                     onClick={() => toggleProductSelection(item.id)}
-                    className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl border text-left text-xs sm:text-sm transition cursor-pointer ${
+                    className={`flex items-center justify-between px-3.5 py-2.5 border text-left text-xs sm:text-sm cursor-pointer ${
                       checked
-                        ? "bg-emerald-500/15 border-emerald-500 text-white font-medium"
-                        : "bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700"
+                        ? "border-emerald-400 bg-neutral-950 text-white"
+                        : "border-neutral-800 text-neutral-300 hover:border-neutral-700"
                     }`}
                   >
                     <span>{item.label}</span>
                     <span
-                      className={`w-5 h-5 rounded flex items-center justify-center border ${
+                      className={`w-4 h-4 flex items-center justify-center border ${
                         checked
-                          ? "bg-emerald-500 border-emerald-500 text-slate-950"
-                          : "border-slate-700"
+                          ? "bg-emerald-400 border-emerald-400 text-black"
+                          : "border-neutral-700"
                       }`}
                     >
-                      {checked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                      {checked && <Check className="w-3 h-3 stroke-[3]" />}
                     </span>
                   </button>
                 );
@@ -871,10 +990,10 @@ export default function App() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
+            <label className="block text-xs text-neutral-300 mb-1.5">
               {lang === "en"
-                ? "Additional Custom Products (Separate multiple with commas)"
-                : "Ƙarin Kayayyaki Na Musamman (Raba su da waƙafi / comma)"}
+                ? "Other items (comma-separated)"
+                : "Wasu kayayyaki (raba da comma)"}
             </label>
             <input
               type="text"
@@ -885,18 +1004,18 @@ export default function App() {
                   customProductsInput: e.target.value,
                 }))
               }
-              placeholder="e.g., Turkeys, Ginger Warehouse, Rice Silo"
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white"
+              placeholder="e.g., Turkeys, Maize Bag Store"
+              className="w-full bg-black border border-neutral-700 focus:border-emerald-400 outline-none px-3.5 py-2.5 text-sm text-white"
             />
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-2">
+          <div className="flex items-center justify-between pt-2">
             <button
               type="button"
               onClick={() =>
                 setState((prev) => ({ ...prev, stage: "ONBOARD_PURPOSE" }))
               }
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 border border-neutral-700 text-neutral-200 text-sm cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>{lang === "en" ? "Back" : "Baya"}</span>
@@ -904,9 +1023,9 @@ export default function App() {
 
             <button
               type="submit"
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition cursor-pointer"
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm cursor-pointer"
             >
-              <span>{lang === "en" ? "Open Dashboard" : "Buɗe Dashboard"}</span>
+              <span>{lang === "en" ? "Go to farm view" : "Je zuwa gona"}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
@@ -915,52 +1034,45 @@ export default function App() {
     );
   }
 
-  // 4. DASHBOARD — EACH PRODUCT TREATED SEPARATELY
-  const againstControls = state.controls.filter((c) => c.mode === "AGAINST");
-  const badgeStyle = {
-    NORMAL: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
-    DANGER: "bg-orange-500/15 text-orange-300 border-orange-500/40",
-    EMERGENCY: "bg-rose-500/15 text-rose-300 border-rose-500/40 animate-pulse",
-  }[statusInfo.level];
-
-  const badgeLabel = {
-    NORMAL: lang === "en" ? "Favorable Weather" : "Yanayi Mai Kyau",
-    DANGER: lang === "en" ? "Unfavorable Weather" : "Yanayi Mara Kyau",
-    EMERGENCY: lang === "en" ? "High Stress Risk" : "Hatari Mai Girma",
+  const statusText = {
+    NORMAL: {
+      label: lang === "en" ? "Comfortable range" : "Yanayi ya dace",
+      cls: "text-emerald-400",
+    },
+    DANGER: {
+      label: lang === "en" ? "Needs attention" : "Yana bukatar kulawa",
+      cls: "text-amber-400",
+    },
+    EMERGENCY: {
+      label: lang === "en" ? "High heat / stress alert" : "Gargadin zafi mai yawa",
+      cls: "text-rose-400",
+    },
   }[statusInfo.level];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
+    <div className="min-h-screen bg-black text-neutral-100">
+      <header className="border-b border-neutral-800 bg-black/95 sticky top-0 z-20">
+        <div className="max-w-6xl mx-auto px-4 sm:px-8 py-3.5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-bold">
-              SB
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-lg text-white">SaveBarn</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  {syncLabel}
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">
-                {lang === "en"
-                  ? `Welcome, ${state.farmName} • ${state.products.length} Separate Product(s)`
-                  : `Barka da zuwa, ${state.farmName} • Kayayyaki ${state.products.length}`}
-              </p>
-            </div>
+            <span className="font-bold text-lg text-emerald-400">SaveBarn</span>
+            <span className="text-neutral-700">|</span>
+            <span className="text-sm font-medium text-white">
+              {state.farmName}
+            </span>
+            <span className="text-xs text-neutral-500 hidden sm:inline">
+              • {syncLabel} • {lastUpdated}
+            </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() =>
                 setState((prev) => ({ ...prev, stage: "ONBOARD_DETAILS" }))
               }
-              className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-200 cursor-pointer"
+              className="px-3 py-1.5 border border-neutral-800 hover:border-neutral-600 text-xs text-neutral-200 cursor-pointer"
             >
-              {lang === "en" ? "Manage Products" : "Gyara Kayayyaki"}
+              {lang === "en" ? "Edit items" : "Gyara kayayyaki"}
             </button>
             <button
               type="button"
@@ -970,368 +1082,378 @@ export default function App() {
                   lang: prev.lang === "en" ? "ha" : "en",
                 }))
               }
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium cursor-pointer"
+              className="flex items-center gap-1 px-3 py-1.5 border border-neutral-800 hover:border-neutral-600 text-xs text-neutral-200 cursor-pointer"
             >
-              <Languages className="w-4 h-4 text-emerald-400" />
+              <Languages className="w-3.5 h-3.5 text-emerald-400" />
               {lang === "en" ? "Hausa" : "English"}
             </button>
             <button
               type="button"
               onClick={handleSignOut}
-              className="flex items-center gap-1 px-3 py-2 rounded-lg bg-rose-950/40 hover:bg-rose-900/50 border border-rose-500/30 text-xs text-rose-200 cursor-pointer"
+              className="flex items-center gap-1 px-3 py-1.5 border border-neutral-800 hover:border-rose-500/60 text-xs text-neutral-300 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>{lang === "en" ? "Sign Out" : "Fita"}</span>
+              <span>{lang === "en" ? "Out" : "Fita"}</span>
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        {/* Separate Product Switcher Strip */}
-        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      <main className="max-w-6xl mx-auto px-4 sm:px-8 py-7 space-y-9">
+        <section className="space-y-4 border-b border-neutral-800 pb-6">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
             <div>
-              <p className="text-xs uppercase tracking-wider text-emerald-400 font-semibold flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5" />
-                {lang === "en"
-                  ? `Welcome to ${state.farmName}`
-                  : `Barka da Zuwa Gonar ${state.farmName}`}
+              <p className="text-xs text-neutral-400 flex items-center gap-1.5">
+                <Radio className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{activeProduct.deviceId}</span>
+                <span>•</span>
+                <span>{currentBand}</span>
               </p>
-              <h1 className="text-2xl font-bold text-white mt-0.5">
+              <h1 className="text-2xl sm:text-3xl font-semibold text-white mt-1">
                 {activeProduct.name}
               </h1>
-              <p className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1 text-emerald-300 font-mono">
-                  <Cpu className="w-3.5 h-3.5" />
-                  {activeProduct.deviceId}
-                </span>
-                <span>•</span>
-                <span>{activeRule.category}</span>
-                <span>•</span>
-                <span className="inline-flex items-center gap-1">
-                  <Radio className="w-3 h-3 text-emerald-400" />
-                  {lastUpdated}
-                </span>
-              </p>
             </div>
-
-            <div className={`px-4 py-2 rounded-full border text-sm font-semibold ${badgeStyle}`}>
-              {badgeLabel}
-            </div>
+            <span className={`text-sm font-semibold ${statusText.cls}`}>
+              {statusText.label}
+            </span>
           </div>
 
-          <div className="pt-3 border-t border-slate-800 space-y-2">
-            <div className="text-xs font-semibold text-slate-400">
-              {lang === "en"
-                ? "Separate Products (Each has its own temperature reading & comfort range):"
-                : "Kayayyaki Daban-Daban (Kowane yana da nasa yanayi da matakin lafiya):"}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {state.products.map((prod) => {
-                const selected = prod.uid === activeProduct.uid;
-                const prodThi = computeTHI(prod.temperatureC, prod.humidityPct);
-                const prodGood =
-                  prod.temperatureC >= prod.rule.minTemp &&
-                  prod.temperatureC <= prod.rule.maxTemp &&
-                  prodThi < prod.rule.maxThi;
-
-                return (
-                  <button
-                    key={prod.uid}
-                    type="button"
-                    onClick={() =>
-                      setState((prev) => ({
-                        ...prev,
-                        activeProductUid: prod.uid,
-                      }))
-                    }
-                    className={`px-3.5 py-2 rounded-xl border text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer ${
-                      selected
-                        ? "bg-emerald-500/20 border-emerald-500 text-white"
-                        : "bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700"
-                    }`}
-                  >
-                    <span>{prod.name}</span>
-                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-200">
-                      {prod.temperatureC}°C
-                    </span>
-                    <span
-                      className={`text-[11px] font-semibold ${
-                        prodGood ? "text-emerald-400" : "text-rose-400"
-                      }`}
-                    >
-                      {prodGood ? "OK" : "ALERT"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-
-        {/* Active Product Climate Metrics */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard
-            icon={<Thermometer className="w-5 h-5 text-orange-400" />}
-            label={lang === "en" ? "Product Temperature" : "Zafin Wannan Samfur"}
-            value={`${activeProduct.temperatureC}°C`}
-            sub={`Favorable: ${activeRule.minTemp}°C – ${activeRule.maxTemp}°C`}
-            highlight={
-              activeProduct.temperatureC > activeRule.maxTemp ||
-              activeProduct.temperatureC < activeRule.minTemp
-            }
-          />
-          <MetricCard
-            icon={<Droplets className="w-5 h-5 text-sky-400" />}
-            label={lang === "en" ? "Humidity" : "Danshin Iska"}
-            value={`${activeProduct.humidityPct}%`}
-            sub="Target Band: 50% – 70%"
-          />
-          <MetricCard
-            icon={<Activity className="w-5 h-5 text-rose-400" />}
-            label="Heat Stress (THI)"
-            value={`${thi}`}
-            sub={`Threshold: ≥ ${activeRule.maxThi}`}
-            highlight={thi >= activeRule.maxThi}
-          />
-          <MetricCard
-            icon={<Wind className="w-5 h-5 text-amber-400" />}
-            label="Ammonia (NH₃)"
-            value={`${activeProduct.ammoniaPpm} ppm`}
-            sub={`Limit: < ${activeRule.maxNh3} ppm`}
-            highlight={activeProduct.ammoniaPpm >= activeRule.maxNh3}
-          />
-        </section>
-
-        {/* Climate Controls with - and + Temperature Buttons */}
-        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <Sliders className="w-5 h-5 text-emerald-400" />
-                {lang === "en"
-                  ? `Climate Controls for ${activeProduct.name}`
-                  : `Kula da Yanayin ${activeProduct.name}`}
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {lang === "en"
-                  ? "Use - or + to lower or raise temperature for this product, or run regulator simulation."
-                  : "Yi amfani da - ko + don rage ko ƙara zafi, ko gwada tasirin na'urorin yanayi."}
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => stepTemperature(-1)}
-                className="flex items-center gap-1 px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs sm:text-sm font-semibold transition cursor-pointer"
-              >
-                <Minus className="w-4 h-4" />
-                <span>1°C</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => stepTemperature(1)}
-                className="flex items-center gap-1 px-3.5 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs sm:text-sm font-semibold transition cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>1°C</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={simulateRegulatorEffect}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-semibold transition cursor-pointer"
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>
-                  {lang === "en"
-                    ? "Simulate Regulator Effect Now"
-                    : "Gwada Tasirin Na'urorin"}
-                </span>
-              </button>
-            </div>
-          </div>
-
-          {againstControls.length > 0 && (
-            <div className="bg-rose-950/30 border border-rose-500/40 rounded-xl px-4 py-2.5 text-xs text-rose-200 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>
-                {againstControls.length} regulator(s) set to work AGAINST asset:{" "}
-                {againstControls.map((c) => c.nameEn).join(", ")}.
-              </span>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            {state.controls.map((ctrl) => {
-              const isInFavor = ctrl.mode === "IN_FAVOR";
-              const IconComp =
-                ctrl.key === "fan"
-                  ? Fan
-                  : ctrl.key === "mist"
-                  ? CloudRain
-                  : ctrl.key === "heater"
-                  ? Flame
-                  : Columns;
-
+          <div className="flex flex-wrap gap-2">
+            {state.products.map((prod) => {
+              const isSelected = prod.uid === activeProduct.uid;
               return (
-                <div
-                  key={ctrl.id}
-                  className={`rounded-xl border p-4 flex flex-col justify-between gap-3 ${
-                    isInFavor
-                      ? "bg-slate-950/70 border-slate-800"
-                      : "bg-rose-950/20 border-rose-500/40"
+                <button
+                  key={prod.uid}
+                  type="button"
+                  onClick={() =>
+                    setState((prev) => ({ ...prev, activeProductUid: prod.uid }))
+                  }
+                  className={`px-3.5 py-2 text-xs sm:text-sm border transition cursor-pointer ${
+                    isSelected
+                      ? "bg-white text-black border-white font-semibold"
+                      : "bg-black text-neutral-300 border-neutral-800 hover:border-neutral-600"
                   }`}
                 >
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="p-2 rounded-lg bg-slate-800 text-emerald-400">
-                        <IconComp className="w-4 h-4" />
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => toggleControlPower(ctrl.id)}
-                        className={`text-xs px-2.5 py-1 rounded-full font-semibold border cursor-pointer ${
-                          ctrl.active
-                            ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
-                            : "bg-slate-800 text-slate-400 border-slate-700"
-                        }`}
-                      >
-                        {ctrl.active ? "ON" : "OFF"}
-                      </button>
-                    </div>
-                    <div className="font-semibold text-sm text-white">
-                      {lang === "en" ? ctrl.nameEn : ctrl.nameHa}
-                    </div>
-                    <div className="text-xs text-slate-400">
-                      {lang === "en" ? "Stance: " : "Matsayi: "}
-                      <span
-                        className={`font-semibold ${
-                          isInFavor ? "text-emerald-400" : "text-rose-400"
-                        }`}
-                      >
-                        {isInFavor
-                          ? lang === "en"
-                            ? "In Favor of Asset"
-                            : "Don Amfanin Gona"
-                          : lang === "en"
-                          ? "Against Asset"
-                          : "Akan Gona"}
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => toggleControlMode(ctrl.id)}
-                    className={`w-full py-2 px-3 rounded-lg text-xs font-semibold border transition cursor-pointer ${
-                      isInFavor
-                        ? "bg-emerald-600/20 hover:bg-emerald-600/30 border-emerald-500/40 text-emerald-200"
-                        : "bg-rose-600/25 hover:bg-rose-600/35 border-rose-500/50 text-rose-200"
-                    }`}
-                  >
-                    {isInFavor
-                      ? lang === "en"
-                        ? "Switch to: Against Asset"
-                        : "Canza zuwa: Akan Gona"
-                      : lang === "en"
-                      ? "Switch to: In Favor of Asset"
-                      : "Canza zuwa: Don Amfanin Gona"}
-                  </button>
-                </div>
+                  {prod.name} ({prod.temperatureC}°C)
+                </button>
               );
             })}
           </div>
         </section>
 
-        {/* Reference-Attributed Guidance (No Personal Name) + Trend Chart */}
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <ShieldAlert className="w-5 h-5 text-emerald-400" />
-              {lang === "en"
-                ? "Climate Guidance & Reference Source"
-                : "Bayanan Yanayi & Tushen Ka'ida"}
-            </h2>
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-6 border-b border-neutral-800 pb-7">
+          <FlatReading
+            icon={<Thermometer className="w-4 h-4 text-amber-400" />}
+            label={lang === "en" ? "Temperature" : "Zafi"}
+            value={`${activeProduct.temperatureC}°C`}
+            hint={`Safe: ${activeRule.minTemp}°C – ${activeRule.maxTemp}°C`}
+          />
+          <FlatReading
+            icon={<Droplets className="w-4 h-4 text-sky-400" />}
+            label={lang === "en" ? "Humidity" : "Danshi"}
+            value={`${activeProduct.humidityPct}%`}
+            hint="Guide: 50% – 70%"
+          />
+          <FlatReading
+            icon={<Activity className="w-4 h-4 text-rose-400" />}
+            label="THI"
+            value={`${thi}`}
+            hint={`Alert from: ${activeRule.maxThi}`}
+          />
+          <FlatReading
+            icon={<Wind className="w-4 h-4 text-emerald-400" />}
+            label="Ammonia (NH₃)"
+            value={`${activeProduct.ammoniaPpm} ppm`}
+            hint={`Keep below: ${activeRule.maxNh3} ppm`}
+          />
+        </section>
 
-            <p className="text-sm text-slate-200 leading-relaxed">
-              {statusInfo.level === "NORMAL"
-                ? lang === "en"
-                  ? `At ${activeProduct.temperatureC}°C, conditions are within the favorable ${activeRule.minTemp}°C–${activeRule.maxTemp}°C band for ${activeProduct.name}.`
-                  : `A kan ${activeProduct.temperatureC}°C, yanayin yana cikin matakin ${activeRule.minTemp}°C–${activeRule.maxTemp}°C wanda ya dace da ${activeProduct.name}.`
-                : statusInfo.isHot
-                ? lang === "en"
-                  ? `At ${activeProduct.temperatureC}°C, temperature is above the favorable ${activeRule.minTemp}°C–${activeRule.maxTemp}°C range for ${activeProduct.name}. Cooling and airflow regulators are recommended In Favor of Asset.`
-                  : `A kan ${activeProduct.temperatureC}°C, zafin ya wuce matakin ${activeRule.minTemp}°C–${activeRule.maxTemp}°C ga ${activeProduct.name}. A kunna sanyaya da iska don kare shi.`
-                : lang === "en"
-                ? `At ${activeProduct.temperatureC}°C, temperature is below the favorable ${activeRule.minTemp}°C–${activeRule.maxTemp}°C range for ${activeProduct.name}. Heating and draft protection are recommended In Favor of Asset.`
-                : `A kan ${activeProduct.temperatureC}°C, zafin ya yi kasa da matakin ${activeRule.minTemp}°C–${activeRule.maxTemp}°C ga ${activeProduct.name}. A kunna dumama don kare shi.`}
-            </p>
-
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 space-y-1.5">
-              <div className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>{lang === "en" ? "Reference Attribution" : "Tushen Bayani"}</span>
-              </div>
-              <p className="text-xs text-slate-300">
-                {lang === "en" ? activeRule.sourceEn : activeRule.sourceHa}
-              </p>
-              <div className="flex items-center gap-1.5 text-[11px] text-slate-400 pt-1">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+        <section className="space-y-4 border-b border-neutral-800 pb-8">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                <Wifi className="w-4 h-4 text-emerald-400" />
                 <span>
                   {lang === "en"
-                    ? "Evaluated using established agricultural/veterinary reference bands."
-                    : "An tantance shi bisa ka'idojin noma da kiwo na kwararru."}
+                    ? "Air conditioners within control range"
+                    : "Na'urorin AC da ke cikin zangon na'ura"}
                 </span>
+              </h2>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                {lang === "en"
+                  ? "Adjust power or fan speed on reachable units. Room temperature is never altered artificially in software."
+                  : "Canza wuta ko gudun iska na AC da ke kusa. Ba a canza yanayin iska da karya a manhaja."}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleDiscoverAirConditioners}
+              className="inline-flex items-center gap-2 px-4 py-2 border border-neutral-700 hover:border-emerald-400 text-xs sm:text-sm text-white cursor-pointer"
+            >
+              <RefreshCw
+                className={`w-4 h-4 text-emerald-400 ${
+                  state.scanningAcs ? "animate-spin" : ""
+                }`}
+              />
+              <span>
+                {state.scanningAcs
+                  ? lang === "en"
+                    ? "Checking range..."
+                    : "Ana dubawa..."
+                  : lang === "en"
+                  ? "Find ACs in range"
+                  : "Nemo AC a kusa"}
+              </span>
+            </button>
+          </div>
+
+          {state.controlFailureNotice && (
+            <div className="border-l-2 border-rose-500 pl-4 py-2 space-y-2 text-xs sm:text-sm">
+              <div className="text-rose-300 font-medium flex items-center gap-2">
+                <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>{state.controlFailureNotice.reason}</span>
               </div>
+              <p className="text-amber-200/90 text-xs flex items-start gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <span>
+                  {lang === "en"
+                    ? "Possibility of inaccuracy: System control or response is unverified here, so readings and expected cooling may not be accurate."
+                    : "Gargadin rashin daidaito: Ba a tabbatar da aikin tsarin ba a nan, don haka karatu ko sanyaya na iya zama ba daidai ba."}
+                </span>
+              </p>
+              <p className="text-neutral-300 text-xs">
+                <strong className="text-emerald-400">
+                  {lang === "en" ? "What to adjust now: " : "Abinda ya kamata a gyara: "}
+                </strong>
+                {specificFallbackRecommendation}
+              </p>
+            </div>
+          )}
+
+          <div className="divide-y divide-neutral-800 border-y border-neutral-800">
+            {state.acUnits.map((ac) => (
+              <div
+                key={ac.id}
+                className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4"
+              >
+                <div>
+                  <div className="text-sm font-semibold text-white flex items-center gap-2">
+                    <span>{ac.name}</span>
+                    <span className="font-mono text-xs text-neutral-400">
+                      ({ac.code} • {ac.rangeMeters}m)
+                    </span>
+                  </div>
+                  <div className="text-xs mt-0.5">
+                    {ac.reachable ? (
+                      <span className="text-emerald-400">In range</span>
+                    ) : (
+                      <span className="text-rose-400">No reply from unit</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleAdjustAc(ac.id, {
+                        power: ac.power === "ON" ? "OFF" : "ON",
+                      })
+                    }
+                    className={`px-3 py-1.5 text-xs font-semibold border cursor-pointer ${
+                      ac.power === "ON"
+                        ? "border-emerald-500 text-emerald-300"
+                        : "border-neutral-700 text-neutral-400"
+                    }`}
+                  >
+                    {ac.power}
+                  </button>
+
+                  {["LOW", "MEDIUM", "HIGH", "TURBO"].map((spd) => (
+                    <button
+                      key={spd}
+                      type="button"
+                      onClick={() => handleAdjustAc(ac.id, { speed: spd })}
+                      className={`px-2.5 py-1.5 text-xs border cursor-pointer ${
+                        ac.speed === spd
+                          ? "bg-emerald-500 text-black border-emerald-500 font-semibold"
+                          : "border-neutral-800 text-neutral-300 hover:border-neutral-600"
+                      }`}
+                    >
+                      {spd}
+                    </button>
+                  ))}
+
+                  <button
+                    type="button"
+                    onClick={() => handleSaveBestSpeedToDb(ac.speed)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 border border-neutral-700 hover:border-emerald-400 text-xs text-emerald-300 cursor-pointer"
+                  >
+                    <BookmarkCheck className="w-3.5 h-3.5" />
+                    <span>Save {ac.speed}</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-8 border-b border-neutral-800 pb-8">
+          <div className="lg:col-span-6 space-y-3">
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Database className="w-4 h-4 text-emerald-400" />
+              <span>
+                {lang === "en"
+                  ? "Saved best AC speeds by weather"
+                  : "Gudun AC da aka adana bisa yanayi"}
+              </span>
+            </h2>
+
+            <div className="divide-y divide-neutral-800 border-t border-neutral-800">
+              {state.speedDb.map((rec) => {
+                const isNow = matchedDbRecord?.id === rec.id;
+                return (
+                  <div
+                    key={rec.id}
+                    className="py-3 flex items-center justify-between gap-3"
+                  >
+                    <div>
+                      <div className="text-sm font-medium text-white">
+                        {rec.conditionBand}{" "}
+                        {isNow && (
+                          <span className="text-xs text-emerald-400 ml-1">
+                            (now)
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-neutral-400">{rec.notes}</div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="font-mono text-xs font-bold text-emerald-300">
+                        {rec.bestSpeed}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyBestSpeedFromDb(rec)}
+                        className="px-2.5 py-1 border border-neutral-700 hover:border-white text-xs text-neutral-200 cursor-pointer"
+                      >
+                        Use
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
-          <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5">
-            <h2 className="text-lg font-bold text-white mb-4">
-              {lang === "en"
-                ? `${activeProduct.name} — Temperature & THI Trend`
-                : `${activeProduct.name} — Jadawalin Zafi da THI`}
+          <div className="lg:col-span-6 space-y-4">
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-emerald-400" />
+              <span>
+                {lang === "en"
+                  ? "Practical advice & source"
+                  : "Shawara mai amfani & tushe"}
+              </span>
             </h2>
-            <div className="h-72 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={activeProduct.history}>
-                  <defs>
-                    <linearGradient id="prodTempGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="time" stroke="#64748b" fontSize={11} />
-                  <YAxis stroke="#64748b" fontSize={11} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#0f172a",
-                      borderColor: "#334155",
-                      borderRadius: "0.75rem",
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="Temp"
-                    stroke="#10b981"
-                    strokeWidth={2}
-                    fill="url(#prodTempGrad)"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="THI"
-                    stroke="#f43f5e"
-                    strokeWidth={2}
-                    fillOpacity={0}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+
+            <p className="text-sm text-neutral-200 leading-relaxed">
+              {specificFallbackRecommendation}
+            </p>
+
+            <p className="text-xs text-amber-200/90 leading-relaxed border-l-2 border-amber-500 pl-3">
+              {lang === "en"
+                ? "Accuracy note: Unverified hardware control or sensor behavior can make readings or expected changes inaccurate—always double-check physically."
+                : "Lura kan daidaito: Inda ba a tabbatar da aikin na'ura ba, bayani na iya zama ba daidai ba—a duba da ido."}
+            </p>
+
+            <div className="text-xs text-neutral-300 space-y-1 pt-1">
+              <div className="font-semibold text-emerald-400 flex items-center gap-1.5">
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>{lang === "en" ? "Reference" : "Tushe"}</span>
+              </div>
+              <p>{lang === "en" ? activeRule.sourceEn : activeRule.sourceHa}</p>
+              <p className="text-neutral-400 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>
+                  {lang === "en"
+                    ? `Recommended DB speed for ${currentBand}: ${matchedDbRecord?.bestSpeed || "MEDIUM"}`
+                    : `Gudun AC na ${currentBand}: ${matchedDbRecord?.bestSpeed || "MEDIUM"}`}
+                </span>
+              </p>
             </div>
+
+            <form onSubmit={handleAddFieldNote} className="pt-2 space-y-2">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={state.fieldNote}
+                  onChange={(e) =>
+                    setState((prev) => ({ ...prev, fieldNote: e.target.value }))
+                  }
+                  placeholder={
+                    lang === "en"
+                      ? `Quick note on ${activeProduct.name}...`
+                      : `Rubuta bayani game da ${activeProduct.name}...`
+                  }
+                  className="flex-1 bg-black border border-neutral-700 focus:border-emerald-400 outline-none px-3 py-1.5 text-xs text-white"
+                />
+                <button
+                  type="submit"
+                  className="px-3.5 py-1.5 bg-white text-black font-semibold text-xs cursor-pointer"
+                >
+                  {lang === "en" ? "Log" : "Ajiye"}
+                </button>
+              </div>
+              {state.savedFieldNotes.length > 0 && (
+                <ul className="space-y-1 text-xs text-neutral-400">
+                  {state.savedFieldNotes.map((n) => (
+                    <li key={n.id}>
+                      <span className="text-neutral-500">[{n.time}]</span>{" "}
+                      <strong className="text-neutral-200">{n.productName}:</strong>{" "}
+                      {n.text}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </form>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-400">
+            {activeProduct.name} — Temperature & THI History
+          </h2>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={activeProduct.history}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
+                <XAxis dataKey="time" stroke="#737373" fontSize={11} />
+                <YAxis stroke="#737373" fontSize={11} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#000000",
+                    borderColor: "#404040",
+                    color: "#ffffff",
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="Temp"
+                  stroke="#34d399"
+                  strokeWidth={2}
+                  fill="#34d399"
+                  fillOpacity={0.12}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="THI"
+                  stroke="#fb7185"
+                  strokeWidth={2}
+                  fillOpacity={0}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
         </section>
       </main>
@@ -1339,21 +1461,17 @@ export default function App() {
   );
 }
 
-function MetricCard({ icon, label, value, sub, highlight }) {
+function FlatReading({ icon, label, value, hint }) {
   return (
-    <div
-      className={`rounded-2xl border p-5 transition ${
-        highlight
-          ? "bg-rose-950/20 border-rose-500/40"
-          : "bg-slate-900 border-slate-800"
-      }`}
-    >
-      <div className="flex items-center justify-between text-slate-400 text-sm font-medium">
-        <span>{label}</span>
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5 text-xs text-neutral-400">
         {icon}
+        <span>{label}</span>
       </div>
-      <div className="text-3xl font-bold text-white mt-2">{value}</div>
-      <div className="text-xs text-slate-400 mt-1">{sub}</div>
+      <div className="text-2xl sm:text-3xl font-semibold text-white">
+        {value}
+      </div>
+      <div className="text-xs text-neutral-500">{hint}</div>
     </div>
   );
 }
